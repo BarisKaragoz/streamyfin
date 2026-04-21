@@ -202,6 +202,7 @@ export type Settings = {
   mergeNextUpAndContinueWatching: boolean;
   // Appearance
   hideRemoteSessionButton: boolean;
+  hideUnwatchedIndicators: boolean;
   hideWatchlistsTab: boolean;
   // Audio look-ahead caching
   audioLookaheadEnabled: boolean;
@@ -287,6 +288,7 @@ export const defaultValues: Settings = {
   mergeNextUpAndContinueWatching: false,
   // Appearance
   hideRemoteSessionButton: false,
+  hideUnwatchedIndicators: false,
   hideWatchlistsTab: false,
   // Audio look-ahead caching defaults
   audioLookaheadEnabled: true,

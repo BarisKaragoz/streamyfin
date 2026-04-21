@@ -52,9 +52,11 @@ export const AppearanceSettings: React.FC = () => {
         </ListItem>
         <ListItem
           title={t("home.settings.appearance.merge_next_up_continue_watching")}
+          disabled={pluginSettings?.mergeNextUpAndContinueWatching?.locked}
         >
           <Switch
             value={settings.mergeNextUpAndContinueWatching}
+            disabled={pluginSettings?.mergeNextUpAndContinueWatching?.locked}
             onValueChange={(value) =>
               updateSettings({ mergeNextUpAndContinueWatching: value })
             }
@@ -69,11 +71,25 @@ export const AppearanceSettings: React.FC = () => {
         />
         <ListItem
           title={t("home.settings.appearance.hide_remote_session_button")}
+          disabled={pluginSettings?.hideRemoteSessionButton?.locked}
         >
           <Switch
             value={settings.hideRemoteSessionButton}
+            disabled={pluginSettings?.hideRemoteSessionButton?.locked}
             onValueChange={(value) =>
               updateSettings({ hideRemoteSessionButton: value })
+            }
+          />
+        </ListItem>
+        <ListItem
+          title={t("home.settings.appearance.hide_unwatched_indicators")}
+          disabled={pluginSettings?.hideUnwatchedIndicators?.locked}
+        >
+          <Switch
+            value={settings.hideUnwatchedIndicators}
+            disabled={pluginSettings?.hideUnwatchedIndicators?.locked}
+            onValueChange={(value) =>
+              updateSettings({ hideUnwatchedIndicators: value })
             }
           />
         </ListItem>

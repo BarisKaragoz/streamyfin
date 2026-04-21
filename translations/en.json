@@ -121,7 +121,8 @@
       "appearance": {
         "title": "Appearance",
         "merge_next_up_continue_watching": "Merge Continue Watching & Next Up",
-        "hide_remote_session_button": "Hide Remote Session Button"
+        "hide_remote_session_button": "Hide Remote Session Button",
+        "hide_unwatched_indicators": "Hide Unwatched Indicators"
       },
       "network": {
         "title": "Network",
