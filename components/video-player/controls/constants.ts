@@ -1,5 +1,6 @@
 export const CONTROLS_CONSTANTS = {
   TIMEOUT: 4000,
+  DOUBLE_TAP_DELAY_MS: 250,
   SCRUB_INTERVAL_MS: 10 * 1000, // 10 seconds in ms
   SCRUB_INTERVAL_TICKS: 10 * 10000000, // 10 seconds in ticks
   TILE_WIDTH: 150,

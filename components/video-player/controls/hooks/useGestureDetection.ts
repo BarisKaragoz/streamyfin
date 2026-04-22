@@ -1,9 +1,11 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { GestureResponderEvent } from "react-native";
+import { CONTROLS_CONSTANTS } from "../constants";
 
 export interface SwipeGestureOptions {
   minDistance?: number;
   maxDuration?: number;
+  doubleTapDelay?: number;
   onSwipeLeft?: () => void;
   onSwipeRight?: () => void;
   onVerticalDragStart?: (side: "left" | "right", initialY: number) => void;
@@ -14,6 +16,8 @@ export interface SwipeGestureOptions {
   ) => void;
   onVerticalDragEnd?: (side: "left" | "right") => void;
   onTap?: () => void;
+  onDoubleTapLeft?: () => void;
+  onDoubleTapRight?: () => void;
   screenWidth?: number;
   screenHeight?: number;
 }
@@ -21,12 +25,15 @@ export interface SwipeGestureOptions {
 export const useGestureDetection = ({
   minDistance = 50,
   maxDuration = 800,
+  doubleTapDelay = CONTROLS_CONSTANTS.DOUBLE_TAP_DELAY_MS,
   onSwipeLeft,
   onSwipeRight,
   onVerticalDragStart,
   onVerticalDragMove,
   onVerticalDragEnd,
   onTap,
+  onDoubleTapLeft,
+  onDoubleTapRight,
   screenWidth = 400,
   screenHeight = 800,
 }: SwipeGestureOptions = {}) => {
@@ -38,6 +45,29 @@ export const useGestureDetection = ({
   const hasMovedEnough = useRef(false);
   const gestureType = useRef<"none" | "horizontal" | "vertical">("none");
   const shouldIgnoreTouch = useRef(false);
+  const lastTapTime = useRef(0);
+  const lastTapSide = useRef<"left" | "right" | null>(null);
+  const singleTapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  const clearSingleTapTimeout = useCallback(() => {
+    if (singleTapTimeoutRef.current) {
+      clearTimeout(singleTapTimeoutRef.current);
+      singleTapTimeoutRef.current = null;
+    }
+  }, []);
+
+  const resetTapState = useCallback(() => {
+    lastTapTime.current = 0;
+    lastTapSide.current = null;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearSingleTapTimeout();
+    };
+  }, [clearSingleTapTimeout]);
 
   const handleTouchStart = useCallback(
     (event: GestureResponderEvent) => {
@@ -96,6 +126,8 @@ export const useGestureDetection = ({
         // Determine gesture type based on initial movement direction
         if (absY > absX && absY > 5) {
           // Vertical gesture - start drag immediately
+          clearSingleTapTimeout();
+          resetTapState();
           gestureType.current = "vertical";
           const side =
             touchStartPosition.current.x < screenWidth / 2 ? "left" : "right";
@@ -104,6 +136,8 @@ export const useGestureDetection = ({
           onVerticalDragStart?.(side, touchStartPosition.current.y);
         } else if (absX > absY && absX > 10) {
           // Horizontal gesture - mark for discrete swipe
+          clearSingleTapTimeout();
+          resetTapState();
           gestureType.current = "horizontal";
         }
       }
@@ -124,7 +158,13 @@ export const useGestureDetection = ({
 
       lastTouchPosition.current = currentPosition;
     },
-    [onVerticalDragStart, onVerticalDragMove, screenWidth],
+    [
+      clearSingleTapTimeout,
+      onVerticalDragStart,
+      onVerticalDragMove,
+      resetTapState,
+      screenWidth,
+    ],
   );
 
   const handleTouchEnd = useCallback(
@@ -187,19 +227,48 @@ export const useGestureDetection = ({
         totalDistance < 10
       ) {
         // It's a tap - short duration and small movement
-        onTap?.();
+        const tapSide = touchEndPosition.x < screenWidth / 2 ? "left" : "right";
+        const isDoubleTap =
+          lastTapSide.current === tapSide &&
+          touchEndTime - lastTapTime.current <= doubleTapDelay;
+
+        if (isDoubleTap) {
+          clearSingleTapTimeout();
+          resetTapState();
+
+          if (tapSide === "left") {
+            onDoubleTapLeft?.();
+          } else {
+            onDoubleTapRight?.();
+          }
+        } else {
+          clearSingleTapTimeout();
+          lastTapTime.current = touchEndTime;
+          lastTapSide.current = tapSide;
+          singleTapTimeoutRef.current = setTimeout(() => {
+            onTap?.();
+            resetTapState();
+            singleTapTimeoutRef.current = null;
+          }, doubleTapDelay);
+        }
       }
 
       hasMovedEnough.current = false;
       gestureType.current = "none";
     },
     [
+      clearSingleTapTimeout,
+      doubleTapDelay,
+      onDoubleTapLeft,
+      onDoubleTapRight,
       maxDuration,
       minDistance,
       onSwipeLeft,
       onSwipeRight,
       onVerticalDragEnd,
       onTap,
+      resetTapState,
+      screenWidth,
     ],
   );
 

@@ -472,6 +472,8 @@ export const Controls: FC<Props> = ({
             onToggleControls={toggleControls}
             onSkipForward={handleSkipForward}
             onSkipBackward={handleSkipBackward}
+            onDoubleTapForward={handleSkipForward}
+            onDoubleTapBackward={handleSkipBackward}
           />
           {/* Technical Info Overlay - rendered outside animated views to stay visible */}
           {getTechnicalInfo && (
