@@ -11,7 +11,11 @@ import {
   getUserLibraryApi,
   getUserViewsApi,
 } from "@jellyfin/sdk/lib/utils/api";
-import { type QueryFunction, useQuery } from "@tanstack/react-query";
+import {
+  type QueryFunction,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useNavigation, useSegments } from "expo-router";
 import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -61,6 +65,12 @@ type MediaListSectionType = {
 
 type Section = InfiniteScrollingCollectionListSection | MediaListSectionType;
 
+// Module-level flag: resets on JS reload (cold app start), persists across
+// component re-mounts within the same session. Used to refresh the random
+// "Suggested Movies" and "Suggested Shows" rows together exactly once per
+// fresh app start, since their cache is otherwise persisted to MMKV.
+let hasRefreshedSuggestionsThisSession = false;
+
 export const HomeWithCarousel = () => {
   const router = useRouter();
   const { t } = useTranslation();
@@ -83,6 +93,7 @@ export const HomeWithCarousel = () => {
   } = useNetworkStatus();
   const invalidateCache = useInvalidatePlaybackProgressCache();
   const [scrollY, setScrollY] = useState(0);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (isConnected && !prevIsConnected.current) {
@@ -217,6 +228,47 @@ export const HomeWithCarousel = () => {
       type: "InfiniteScrollingCollectionList",
       pageSize,
     }),
+    [api, user?.Id],
+  );
+
+  // Extracted so the same fetch can power both the useInfiniteQuery in
+  // InfiniteScrollingCollectionList and the atomic dual-refresh effect below.
+  const fetchSuggestedMoviesPage = useCallback(
+    async (pageParam: number = 0): Promise<BaseItemDto[]> => {
+      if (!api || !user?.Id) return [];
+      return (
+        (
+          await getSuggestionsApi(api).getSuggestions({
+            userId: user.Id,
+            startIndex: pageParam,
+            limit: 10,
+            mediaType: ["Video"],
+            type: ["Movie"],
+          })
+        ).data.Items || []
+      );
+    },
+    [api, user?.Id],
+  );
+
+  const fetchSuggestedShowsPage = useCallback(
+    async (pageParam: number = 0): Promise<BaseItemDto[]> => {
+      if (!api || !user?.Id) return [];
+      return (
+        (
+          await getItemsApi(api).getItems({
+            userId: user.Id,
+            startIndex: pageParam,
+            limit: 10,
+            recursive: true,
+            includeItemTypes: ["Series"],
+            sortBy: ["IsFavoriteOrLiked", "Random"],
+            imageTypeLimit: 1,
+            enableImageTypes: ["Primary", "Backdrop", "Thumb"],
+          })
+        ).data.Items || []
+      );
+    },
     [api, user?.Id],
   );
 
@@ -355,15 +407,7 @@ export const HomeWithCarousel = () => {
               title: t("home.suggested_movies"),
               queryKey: ["home", "suggestedMovies", user?.Id],
               queryFn: async ({ pageParam = 0 }: { pageParam?: number }) =>
-                (
-                  await getSuggestionsApi(api).getSuggestions({
-                    userId: user?.Id,
-                    startIndex: pageParam,
-                    limit: 10,
-                    mediaType: ["Video"],
-                    type: ["Movie"],
-                  })
-                ).data.Items || [],
+                fetchSuggestedMoviesPage(pageParam),
               type: "InfiniteScrollingCollectionList" as const,
               orientation: "vertical" as const,
               pageSize: 10,
@@ -377,18 +421,7 @@ export const HomeWithCarousel = () => {
               title: t("home.suggested_shows"),
               queryKey: ["home", "suggestedShows", user?.Id],
               queryFn: async ({ pageParam = 0 }: { pageParam?: number }) =>
-                (
-                  await getItemsApi(api).getItems({
-                    userId: user?.Id,
-                    startIndex: pageParam,
-                    limit: 10,
-                    recursive: true,
-                    includeItemTypes: ["Series"],
-                    sortBy: ["IsFavoriteOrLiked", "Random"],
-                    imageTypeLimit: 1,
-                    enableImageTypes: ["Primary", "Backdrop", "Thumb"],
-                  })
-                ).data.Items || [],
+                fetchSuggestedShowsPage(pageParam),
               type: "InfiniteScrollingCollectionList" as const,
               orientation: "vertical" as const,
               pageSize: 10,
@@ -403,6 +436,8 @@ export const HomeWithCarousel = () => {
     collections,
     t,
     createCollectionConfig,
+    fetchSuggestedMoviesPage,
+    fetchSuggestedShowsPage,
     settings?.streamyStatsMovieRecommendations,
     settings?.streamyStatsSeriesRecommendations,
     settings.mergeNextUpAndContinueWatching,
@@ -486,6 +521,70 @@ export const HomeWithCarousel = () => {
   }, [api, user?.Id, settings?.home?.sections, t]);
 
   const sections = settings?.home?.sections ? customSections : defaultSections;
+
+  // On the first fresh app start, refresh Suggested Movies + Suggested Shows
+  // together so the random picks update in lockstep instead of showing
+  // yesterday's persisted cache or popping in at different times. Both
+  // fetches run in parallel, but neither cache is updated until both have
+  // resolved — so the rows re-render in the same frame even though the
+  // server-side Suggestions endpoint is heavier than the Items endpoint.
+  const usingCustomSections = !!settings?.home?.sections;
+  const hasSuggestedMovies =
+    !usingCustomSections && !settings?.streamyStatsMovieRecommendations;
+  const hasSuggestedShows =
+    !usingCustomSections && !settings?.streamyStatsSeriesRecommendations;
+
+  useEffect(() => {
+    if (hasRefreshedSuggestionsThisSession || !api || !user?.Id || !data)
+      return;
+    if (!hasSuggestedMovies && !hasSuggestedShows) return;
+
+    hasRefreshedSuggestionsThisSession = true;
+    const userId = user.Id;
+    const moviesKey = ["home", "suggestedMovies", userId];
+    const showsKey = ["home", "suggestedShows", userId];
+
+    void (async () => {
+      try {
+        const [moviesPage, showsPage] = await Promise.all([
+          hasSuggestedMovies
+            ? fetchSuggestedMoviesPage(0)
+            : Promise.resolve(null),
+          hasSuggestedShows
+            ? fetchSuggestedShowsPage(0)
+            : Promise.resolve(null),
+        ]);
+
+        // Both setQueryData calls run in the same microtask → React batches
+        // the observer notifications into a single re-render, so both rows
+        // swap to the new picks simultaneously.
+        if (moviesPage) {
+          queryClient.setQueryData(moviesKey, {
+            pages: [moviesPage],
+            pageParams: [0],
+          });
+        }
+        if (showsPage) {
+          queryClient.setQueryData(showsKey, {
+            pages: [showsPage],
+            pageParams: [0],
+          });
+        }
+      } catch {
+        // Allow a retry on the next fresh start if either fetch failed.
+        hasRefreshedSuggestionsThisSession = false;
+      }
+    })();
+  }, [
+    api,
+    user?.Id,
+    data,
+    hasSuggestedMovies,
+    hasSuggestedShows,
+    queryClient,
+    fetchSuggestedMoviesPage,
+    fetchSuggestedShowsPage,
+  ]);
 
   if (!isConnected || serverConnected !== true) {
     let title = "";
