@@ -370,6 +370,31 @@ export const HomeWithCarousel = () => {
             },
           ]
         : []),
+      // Only show Jellyfin suggested shows if StreamyStats series recommendations are disabled
+      ...(!settings?.streamyStatsSeriesRecommendations
+        ? [
+            {
+              title: t("home.suggested_shows"),
+              queryKey: ["home", "suggestedShows", user?.Id],
+              queryFn: async ({ pageParam = 0 }: { pageParam?: number }) =>
+                (
+                  await getItemsApi(api).getItems({
+                    userId: user?.Id,
+                    startIndex: pageParam,
+                    limit: 10,
+                    recursive: true,
+                    includeItemTypes: ["Series"],
+                    sortBy: ["IsFavoriteOrLiked", "Random"],
+                    imageTypeLimit: 1,
+                    enableImageTypes: ["Primary", "Backdrop", "Thumb"],
+                  })
+                ).data.Items || [],
+              type: "InfiniteScrollingCollectionList" as const,
+              orientation: "vertical" as const,
+              pageSize: 10,
+            },
+          ]
+        : []),
     ];
     return ss;
   }, [
@@ -379,6 +404,7 @@ export const HomeWithCarousel = () => {
     t,
     createCollectionConfig,
     settings?.streamyStatsMovieRecommendations,
+    settings?.streamyStatsSeriesRecommendations,
     settings.mergeNextUpAndContinueWatching,
   ]);
 
