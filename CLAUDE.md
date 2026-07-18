@@ -37,7 +37,7 @@ Build/iOS:
 - `xcode-build-workspace-not-project` | Missing Expo/ExpoModulesCore modulemap = building .xcodeproj; open .xcworkspace
 - `hermes-duplicate-framework-after-rn-upgrade` | RN 0.82+ renames hermes→hermesvm.framework; stale copy → simulator DuplicateIdentifier; clean build folder
 - `mpvkit-nettle-linker-warnings-harmless` | Release-link `_nettle_*` symbol warnings from prebuilt MPVKit are noise; ignore Pods/xcframework warnings
-- `creation-variant-first-build-signing` | Creation prebuild generates ios/Creation.xcworkspace; new bundle ID needs one-time Xcode automatic-signing run
+- `creation-variant-first-build-signing` | Creation prebuild generates ios/Creation.xcworkspace; upstream app.json ships the WRONG appleTeamId — app.config.js overrides it with ours (G4V3C7URJ9)
 - `release-device-builds-use-no-bundler` | Release --device builds: add --no-bundler; log streamer otherwise hangs and swallows Ctrl+C
 
 TV Platform:
@@ -73,6 +73,10 @@ bun run android:tv
 bun run prebuild:creation
 bun run ios:creation
 
+# Signed Release build installed on a physical iPhone (handles provisioning)
+bun run ios:device            # default app
+bun run ios:creation:device   # Creation variant
+
 # Code quality
 bun run typecheck             # TypeScript check
 bun run check                 # BiomeJS check
@@ -86,10 +90,13 @@ bun run ios:install-metal-toolchain  # Fix "missing Metal Toolchain" build error
 
 ### App Variants
 
-A second app instance ("Creation") can be installed alongside the default app. It is driven by the `APP_VARIANT=creation` env var, handled in `app.config.js`: it overrides the display name ("Creation"), iOS bundle identifier / Android package (`com.fredrikburmester.streamyfin.creation`), and URL scheme (`streamyfin-creation`).
+A second app instance ("Creation") can be installed alongside the default app. It is driven by the `APP_VARIANT=creation` env var, handled in `app.config.js`: it overrides the display name ("Creation"), iOS bundle identifier / Android package (`com.baris.streamyfin.creation`), and URL scheme (`streamyfin-creation`).
+
+`app.config.js` also unconditionally overrides upstream's signing identity for this fork: `appleTeamId` → `G4V3C7URJ9` and the default variant's bundle ID → `com.baris.streamyfin`. Upstream's `com.fredrikburmester.streamyfin` belongs to the published App Store app and can never be registered to another team, so builds signed with it fail (`Failed Registering Bundle Identifier`).
 
 - The generated `ios/`/`android` folders always reflect the **last-run prebuild**. When switching variants, run the matching prebuild first (`bun run prebuild` vs `bun run prebuild:creation`) before building — otherwise the wrong variant gets built.
 - `prebuild` runs `expo prebuild --clean`, which deletes and regenerates the native folders. Never hand-edit `ios/` or `android/`; all variant config belongs in `app.config.js`/`app.json`.
+- For physical-device installs use `bun run ios:device` / `bun run ios:creation:device` (wraps `scripts/ios/build-device.sh`). `expo run:ios --device` fails with "No profiles found" after each prebuild because it omits `-allowProvisioningUpdates`; the script passes that flag and installs via `xcrun devicectl`.
 
 ## Tech Stack
 

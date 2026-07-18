@@ -22,12 +22,22 @@ module.exports = ({ config }) => {
     androidConfig.googleServicesFile = process.env.GOOGLE_SERVICES_JSON;
   }
 
+  // Sign with our own team; app.json carries upstream's team ID
+  config.ios.appleTeamId = "G4V3C7URJ9";
+
+  // Upstream's bundle ID belongs to the published App Store app and cannot be
+  // registered to our team, so the fork uses its own identifier
+  config.ios.bundleIdentifier = "com.baris.streamyfin";
+  config.android.package = "com.baris.streamyfin";
+
   // Second app instance, installable alongside the default one
   if (process.env.APP_VARIANT === "creation") {
     config.name = "Creation";
-    config.ios.bundleIdentifier = "com.fredrikburmester.streamyfin.creation";
-    config.android.package = "com.fredrikburmester.streamyfin.creation";
+    config.ios.bundleIdentifier = "com.baris.streamyfin.creation";
+    config.android.package = "com.baris.streamyfin.creation";
     config.scheme = "streamyfin-creation";
+    config.icon = "./assets/images/icon-creation.png";
+    config.ios.icon = "./assets/images/icon-creation.png";
   }
 
   return {

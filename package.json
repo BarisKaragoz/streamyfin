@@ -13,6 +13,8 @@
     "ios": "cross-env EXPO_TV=0 expo run:ios",
     "ios:tv": "cross-env EXPO_TV=1 expo run:ios",
     "ios:creation": "cross-env EXPO_TV=0 APP_VARIANT=creation expo run:ios",
+    "ios:device": "cross-env EXPO_TV=0 bash scripts/ios/build-device.sh Streamyfin",
+    "ios:creation:device": "cross-env EXPO_TV=0 APP_VARIANT=creation bash scripts/ios/build-device.sh Creation",
     "android": "cross-env EXPO_TV=0 expo run:android",
     "android:tv": "cross-env EXPO_TV=1 expo run:android",
     "build:android:local": "cd android && cross-env NODE_ENV=production ./gradlew assembleRelease",
