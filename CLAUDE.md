@@ -37,6 +37,8 @@ Build/iOS:
 - `xcode-build-workspace-not-project` | Missing Expo/ExpoModulesCore modulemap = building .xcodeproj; open .xcworkspace
 - `hermes-duplicate-framework-after-rn-upgrade` | RN 0.82+ renames hermes→hermesvm.framework; stale copy → simulator DuplicateIdentifier; clean build folder
 - `mpvkit-nettle-linker-warnings-harmless` | Release-link `_nettle_*` symbol warnings from prebuilt MPVKit are noise; ignore Pods/xcframework warnings
+- `creation-variant-first-build-signing` | Creation prebuild generates ios/Creation.xcworkspace; new bundle ID needs one-time Xcode automatic-signing run
+- `release-device-builds-use-no-bundler` | Release --device builds: add --no-bundler; log streamer otherwise hangs and swallows Ctrl+C
 
 TV Platform:
 - `tv-modals-must-use-navigation-pattern` | Use atom+router.push(), never overlay/absolute modals
