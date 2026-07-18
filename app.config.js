@@ -22,6 +22,14 @@ module.exports = ({ config }) => {
     androidConfig.googleServicesFile = process.env.GOOGLE_SERVICES_JSON;
   }
 
+  // Second app instance, installable alongside the default one
+  if (process.env.APP_VARIANT === "creation") {
+    config.name = "Creation";
+    config.ios.bundleIdentifier = "com.fredrikburmester.streamyfin.creation";
+    config.android.package = "com.fredrikburmester.streamyfin.creation";
+    config.scheme = "streamyfin-creation";
+  }
+
   return {
     ...(Object.keys(androidConfig).length > 0 && { android: androidConfig }),
     ...config,
