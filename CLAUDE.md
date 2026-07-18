@@ -37,7 +37,7 @@ Build/iOS:
 - `xcode-build-workspace-not-project` | Missing Expo/ExpoModulesCore modulemap = building .xcodeproj; open .xcworkspace
 - `hermes-duplicate-framework-after-rn-upgrade` | RN 0.82+ renames hermes→hermesvm.framework; stale copy → simulator DuplicateIdentifier; clean build folder
 - `mpvkit-nettle-linker-warnings-harmless` | Release-link `_nettle_*` symbol warnings from prebuilt MPVKit are noise; ignore Pods/xcframework warnings
-- `creation-variant-first-build-signing` | Creation prebuild generates ios/Creation.xcworkspace; upstream app.json ships the WRONG appleTeamId — app.config.js overrides it with ours (G4V3C7URJ9)
+- `creation-variant-first-build-signing` | Fork signing: upstream's appleTeamId AND published bundle ID are unusable — app.config.js overrides both (team G4V3C7URJ9, com.baris.streamyfin); wildcard-profile entitlement errors ⇒ run the :device script to mint a profile
 - `release-device-builds-use-no-bundler` | Release --device builds: add --no-bundler; log streamer otherwise hangs and swallows Ctrl+C
 
 TV Platform:
