@@ -62,6 +62,10 @@ bun run prebuild:tv
 bun run ios:tv
 bun run android:tv
 
+# "Creation" app variant (second instance, installs alongside the default app)
+bun run prebuild:creation
+bun run ios:creation
+
 # Code quality
 bun run typecheck             # TypeScript check
 bun run check                 # BiomeJS check
@@ -73,10 +77,17 @@ bun run test                  # Run all checks (typecheck, lint, format, doctor)
 bun run ios:install-metal-toolchain  # Fix "missing Metal Toolchain" build errors
 ```
 
+### App Variants
+
+A second app instance ("Creation") can be installed alongside the default app. It is driven by the `APP_VARIANT=creation` env var, handled in `app.config.js`: it overrides the display name ("Creation"), iOS bundle identifier / Android package (`com.fredrikburmester.streamyfin.creation`), and URL scheme (`streamyfin-creation`).
+
+- The generated `ios/`/`android` folders always reflect the **last-run prebuild**. When switching variants, run the matching prebuild first (`bun run prebuild` vs `bun run prebuild:creation`) before building — otherwise the wrong variant gets built.
+- `prebuild` runs `expo prebuild --clean`, which deletes and regenerates the native folders. Never hand-edit `ios/` or `android/`; all variant config belongs in `app.config.js`/`app.json`.
+
 ## Tech Stack
 
 - **Runtime**: Bun
-- **Framework**: React Native (Expo SDK 54)
+- **Framework**: React Native (Expo SDK 56)
 - **Language**: TypeScript (strict mode)
 - **State Management**: Jotai (global state atoms) + React Query (server state)
 - **API**: Jellyfin SDK (`@jellyfin/sdk`)
