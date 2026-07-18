@@ -33,6 +33,11 @@ Native Modules:
 - `thread-safe-state-for-stop-flags` | Stop flags need synchronous setter (stateQueue.sync not async)
 - `native-swiftui-view-sizing` | Need explicit frame + intrinsicContentSize override in ExpoView
 
+Build/iOS:
+- `xcode-build-workspace-not-project` | Missing Expo/ExpoModulesCore modulemap = building .xcodeproj; open .xcworkspace
+- `hermes-duplicate-framework-after-rn-upgrade` | RN 0.82+ renames hermes→hermesvm.framework; stale copy → simulator DuplicateIdentifier; clean build folder
+- `mpvkit-nettle-linker-warnings-harmless` | Release-link `_nettle_*` symbol warnings from prebuilt MPVKit are noise; ignore Pods/xcframework warnings
+
 TV Platform:
 - `tv-modals-must-use-navigation-pattern` | Use atom+router.push(), never overlay/absolute modals
 - `tv-grid-layout-pattern` | ScrollView+flexWrap, not FlatList numColumns
