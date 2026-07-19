@@ -41,7 +41,7 @@ module.exports = ({ config }) => {
   }
 
   if (process.env.APP_VARIANT === "sports") {
-    config.name = "sports";
+    config.name = "Sports";
     config.ios.bundleIdentifier = "com.baris.streamyfin.sports";
     config.android.package = "com.baris.streamyfin.sports";
     config.scheme = "streamyfin-sports";
