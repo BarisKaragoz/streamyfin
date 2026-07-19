@@ -40,6 +40,15 @@ module.exports = ({ config }) => {
     config.ios.icon = "./assets/images/icon-creation.png";
   }
 
+  if (process.env.APP_VARIANT === "sports") {
+    config.name = "sports";
+    config.ios.bundleIdentifier = "com.baris.streamyfin.sports";
+    config.android.package = "com.baris.streamyfin.sports";
+    config.scheme = "streamyfin-sports";
+    config.icon = "./assets/images/icon-sports.png";
+    config.ios.icon = "./assets/images/icon-sports.png";
+  }
+
   return {
     ...(Object.keys(androidConfig).length > 0 && { android: androidConfig }),
     ...config,

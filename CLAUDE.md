@@ -69,13 +69,16 @@ bun run prebuild:tv
 bun run ios:tv
 bun run android:tv
 
-# "Creation" app variant (second instance, installs alongside the default app)
-bun run prebuild:creation
+# App variants (extra instances, install alongside the default app)
+bun run prebuild:creation     # "Creation" variant
 bun run ios:creation
+bun run prebuild:sports       # "sports" variant
+bun run ios:sports
 
 # Signed Release build installed on a physical iPhone (handles provisioning)
 bun run ios:device            # default app
 bun run ios:creation:device   # Creation variant
+bun run ios:sports:device     # sports variant
 
 # Code quality
 bun run typecheck             # TypeScript check
@@ -90,7 +93,12 @@ bun run ios:install-metal-toolchain  # Fix "missing Metal Toolchain" build error
 
 ### App Variants
 
-A second app instance ("Creation") can be installed alongside the default app. It is driven by the `APP_VARIANT=creation` env var, handled in `app.config.js`: it overrides the display name ("Creation"), iOS bundle identifier / Android package (`com.baris.streamyfin.creation`), and URL scheme (`streamyfin-creation`).
+Extra app instances can be installed alongside the default app, driven by the `APP_VARIANT` env var and handled in `app.config.js`. Each variant overrides the display name, iOS bundle identifier / Android package, URL scheme, and icon:
+
+- `APP_VARIANT=creation` → "Creation", `com.baris.streamyfin.creation`, scheme `streamyfin-creation`, `icon-creation.png`
+- `APP_VARIANT=sports` → "sports", `com.baris.streamyfin.sports`, scheme `streamyfin-sports`, `icon-sports.png`
+
+Because the variant changes `config.name`, prebuild names the generated native project after it (e.g. `ios/sports.xcworkspace`, scheme `sports`), not `Streamyfin.xcworkspace`.
 
 `app.config.js` also unconditionally overrides upstream's signing identity for this fork: `appleTeamId` → `G4V3C7URJ9` and the default variant's bundle ID → `com.baris.streamyfin`. Upstream's `com.fredrikburmester.streamyfin` belongs to the published App Store app and can never be registered to another team, so builds signed with it fail (`Failed Registering Bundle Identifier`).
 
