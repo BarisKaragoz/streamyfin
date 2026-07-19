@@ -289,6 +289,10 @@ export const Controls: FC<Props> = ({
   const isHoldScrubbing = useSharedValue(false);
   const [isHoldSeeking, setIsHoldSeeking] = useState(false);
   const holdScrubStartMsRef = useRef(0);
+  const lastLiveSeekRef = useRef({ atTime: 0, targetMs: 0 });
+  const liveSeekTrailingRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Recompute progress whenever scrubbing is active or when progress significantly changes
   useAnimatedReaction(
@@ -511,8 +515,19 @@ export const Controls: FC<Props> = ({
     [computeHoldSeekOffsetMs, maxMs],
   );
 
+  const clearLiveSeekTrailing = useCallback(() => {
+    if (liveSeekTrailingRef.current) {
+      clearTimeout(liveSeekTrailingRef.current);
+      liveSeekTrailingRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearLiveSeekTrailing, [clearLiveSeekTrailing]);
+
   const handleHoldSeekStart = useCallback(() => {
     holdScrubStartMsRef.current = progress.value;
+    lastLiveSeekRef.current = { atTime: 0, targetMs: progress.value };
+    clearLiveSeekTrailing();
     startScrub();
     holdScrubProgress.value = progress.value;
     isHoldScrubbing.value = true;
@@ -527,6 +542,7 @@ export const Controls: FC<Props> = ({
     isHoldScrubbing,
     setShowControls,
     handleSliderChange,
+    clearLiveSeekTrailing,
   ]);
 
   const handleHoldSeekMove = useCallback(
@@ -534,18 +550,62 @@ export const Controls: FC<Props> = ({
       const target = holdSeekTargetMs(deltaX);
       holdScrubProgress.value = target;
       handleSliderChange(target);
+      // Without trickplay images there is no thumbnail to show, so seek the
+      // paused video itself and let the full-screen frame act as the preview
+      // (Infuse/VLC style). Skipped when trickplay exists — the bubble covers
+      // it without disturbing the demuxer.
+      if (!trickplayInfo) {
+        const now = Date.now();
+        const last = lastLiveSeekRef.current;
+        if (
+          now - last.atTime >=
+            CONTROLS_CONSTANTS.HOLD_DRAG_LIVE_SEEK_INTERVAL_MS &&
+          Math.abs(target - last.targetMs) >=
+            CONTROLS_CONSTANTS.HOLD_DRAG_LIVE_SEEK_MIN_DELTA_MS
+        ) {
+          lastLiveSeekRef.current = { atTime: now, targetMs: target };
+          // MPV uses ms, seek expects ms
+          seek(Math.max(0, Math.floor(target)));
+        }
+        // Trailing catch-up: seeks only fire on move events, so when the
+        // finger slows down and rests, the previewed frame would otherwise
+        // lag the target by up to a throttle window. Converge to the final
+        // target once movement pauses so the frame on screen is the frame
+        // playback resumes from.
+        clearLiveSeekTrailing();
+        liveSeekTrailingRef.current = setTimeout(() => {
+          liveSeekTrailingRef.current = null;
+          if (Math.abs(target - lastLiveSeekRef.current.targetMs) < 50) return;
+          lastLiveSeekRef.current = { atTime: Date.now(), targetMs: target };
+          seek(Math.max(0, Math.floor(target)));
+        }, CONTROLS_CONSTANTS.HOLD_DRAG_LIVE_SEEK_INTERVAL_MS);
+      }
     },
-    [holdSeekTargetMs, holdScrubProgress, handleSliderChange],
+    [
+      holdSeekTargetMs,
+      holdScrubProgress,
+      handleSliderChange,
+      trickplayInfo,
+      seek,
+      clearLiveSeekTrailing,
+    ],
   );
 
   const handleHoldSeekEnd = useCallback(
     (deltaX: number) => {
+      // The final exact seek below supersedes any pending trailing preview
       const target = holdSeekTargetMs(deltaX);
+      clearLiveSeekTrailing();
       isHoldScrubbing.value = false;
       setIsHoldSeeking(false);
       handleSliderComplete(target);
     },
-    [holdSeekTargetMs, isHoldScrubbing, handleSliderComplete],
+    [
+      holdSeekTargetMs,
+      isHoldScrubbing,
+      handleSliderComplete,
+      clearLiveSeekTrailing,
+    ],
   );
 
   const switchOnEpisodeMode = useCallback(() => {

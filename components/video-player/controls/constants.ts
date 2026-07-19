@@ -14,11 +14,17 @@ export const CONTROLS_CONSTANTS = {
   HOLD_DRAG_ACTIVATE_MS: 500,
   // Touches starting this close to the left edge are left to the system
   // swipe-back gesture (active while controls are hidden). Must match the
-  // player route's gestureResponseDistance.start in app/_layout.tsx.
+  // player route's gestureResponseDistance.end in app/_layout.tsx.
   BACK_GESTURE_EDGE_EXCLUSION_PX: 50,
   HOLD_DRAG_DEAD_ZONE_PX: 10,
   HOLD_DRAG_MAX_DRAG_RATIO: 0.75, // Fraction of screen width for max seek distance
   HOLD_DRAG_MAX_SEEK_SECONDS: 600,
+  // Live-seek scrub preview (used when the item has no trickplay images):
+  // while hold-dragging, the paused video is seeked to the scrub position so
+  // the full-screen frame acts as the preview. Throttled to avoid hammering
+  // the demuxer/network with a seek per touch event.
+  HOLD_DRAG_LIVE_SEEK_INTERVAL_MS: 300,
+  HOLD_DRAG_LIVE_SEEK_MIN_DELTA_MS: 500,
 } as const;
 
 export const ICON_SIZES = {
