@@ -431,6 +431,12 @@ function Layout() {
                                       headerShown: false,
                                       title: "",
                                       header: () => null,
+                                      // iOS swipe-back: initially disabled
+                                      // (controls start visible); the player
+                                      // toggles it via setOptions so the
+                                      // gesture only works while controls
+                                      // are hidden.
+                                      gestureEnabled: false,
                                     }}
                                   />
                                   <Stack.Screen

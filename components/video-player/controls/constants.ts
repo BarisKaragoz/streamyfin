@@ -11,6 +11,13 @@ export const CONTROLS_CONSTANTS = {
   LONG_PRESS_MAX_ACCELERATION: 4,
   LONG_PRESS_INTERVAL: 300,
   SLIDER_DEBOUNCE_MS: 3,
+  HOLD_DRAG_ACTIVATE_MS: 500,
+  // Touches starting this close to the left edge are left to the system
+  // swipe-back gesture (active while controls are hidden).
+  BACK_GESTURE_EDGE_EXCLUSION_PX: 30,
+  HOLD_DRAG_DEAD_ZONE_PX: 10,
+  HOLD_DRAG_MAX_DRAG_RATIO: 0.75, // Fraction of screen width for max seek distance
+  HOLD_DRAG_MAX_SEEK_SECONDS: 600,
 } as const;
 
 export const ICON_SIZES = {

@@ -47,6 +47,17 @@ export function useVideoSlider({
     isSeeking.value = true;
   }, [showControls, isPlaying, pause, progress, isSeeking]);
 
+  // Scrub start for gestures that don't originate on the slider itself
+  // (e.g. hold-drag seek), so it must work while controls are hidden.
+  const startScrub = useCallback(() => {
+    setIsSliding(true);
+    wasPlayingRef.current = isPlaying;
+    lastProgressRef.current = progress.value;
+
+    pause();
+    isSeeking.value = true;
+  }, [isPlaying, pause, progress, isSeeking]);
+
   const handleTouchStart = useCallback(() => {
     if (!showControls) {
       return;
@@ -107,6 +118,7 @@ export function useVideoSlider({
     isSliding,
     time,
     handleSliderStart,
+    startScrub,
     handleTouchStart,
     handleTouchEnd,
     handleSliderComplete,

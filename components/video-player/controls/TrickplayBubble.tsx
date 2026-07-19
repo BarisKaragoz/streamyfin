@@ -32,6 +32,11 @@ interface TrickplayBubbleProps {
   imageScale?: number;
   /** Chapter name at the scrubbed position, if any. */
   chapterName?: string | null;
+  /**
+   * Render as a free-standing centered block instead of anchoring to the
+   * slider's bubble container (used by the hold-drag seek preview).
+   */
+  centered?: boolean;
 }
 
 export const TrickplayBubble: FC<TrickplayBubbleProps> = ({
@@ -40,6 +45,7 @@ export const TrickplayBubble: FC<TrickplayBubbleProps> = ({
   time,
   imageScale = 1,
   chapterName,
+  centered = false,
 }) => {
   if (!trickPlayUrl || !trickplayInfo) {
     return null;
@@ -56,21 +62,34 @@ export const TrickplayBubble: FC<TrickplayBubbleProps> = ({
 
   return (
     <View
-      style={{
-        position: "absolute",
-        // Sit just above the slider — high enough not to overlap the
-        // progress bar, low enough to feel anchored to the thumb.
-        left: -BUBBLE_LEFT_OFFSET * imageScale,
-        bottom: 0,
-        paddingTop: 12,
-        paddingBottom: 5,
-        width: tileWidth * BUBBLE_WIDTH_MULTIPLIER * imageScale,
-        justifyContent: "center",
-        alignItems: "center",
-        // Bring the bubble in front of the player title / overlays.
-        zIndex: 999,
-        elevation: 10,
-      }}
+      style={
+        centered
+          ? {
+              // The scale transform on the inner view doesn't affect layout,
+              // so reserve the visually scaled size explicitly.
+              width: tileWidth * finalScale + 12,
+              height: tileHeight * finalScale + 12,
+              justifyContent: "center",
+              alignItems: "center",
+              zIndex: 999,
+              elevation: 10,
+            }
+          : {
+              position: "absolute",
+              // Sit just above the slider — high enough not to overlap the
+              // progress bar, low enough to feel anchored to the thumb.
+              left: -BUBBLE_LEFT_OFFSET * imageScale,
+              bottom: 0,
+              paddingTop: 12,
+              paddingBottom: 5,
+              width: tileWidth * BUBBLE_WIDTH_MULTIPLIER * imageScale,
+              justifyContent: "center",
+              alignItems: "center",
+              // Bring the bubble in front of the player title / overlays.
+              zIndex: 999,
+              elevation: 10,
+            }
+      }
     >
       <View
         style={{

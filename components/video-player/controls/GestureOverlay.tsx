@@ -4,6 +4,7 @@ import { Animated, Pressable } from "react-native";
 import { Text } from "@/components/common/Text";
 import { useHaptic } from "@/hooks/useHaptic";
 import { useSettings } from "@/utils/atoms/settings";
+import { CONTROLS_CONSTANTS } from "./constants";
 import { useGestureDetection } from "./hooks/useGestureDetection";
 import { useVolumeAndBrightness } from "./hooks/useVolumeAndBrightness";
 
@@ -16,6 +17,9 @@ interface Props {
   onSkipBackward: () => void;
   onDoubleTapForward: () => void;
   onDoubleTapBackward: () => void;
+  onHoldSeekStart: () => void;
+  onHoldSeekMove: (deltaX: number) => void;
+  onHoldSeekEnd: (deltaX: number) => void;
 }
 
 interface FeedbackState {
@@ -34,6 +38,9 @@ export const GestureOverlay = ({
   onSkipBackward,
   onDoubleTapForward,
   onDoubleTapBackward,
+  onHoldSeekStart,
+  onHoldSeekMove,
+  onHoldSeekEnd,
 }: Props) => {
   const { settings } = useSettings();
   const lightHaptic = useHaptic("light");
@@ -190,6 +197,34 @@ export const GestureOverlay = ({
     });
   }, [onDoubleTapBackward, settings.rewindSkipTime, showFeedback]);
 
+  // Hold-drag seek is handled by the parent (pauses, scrubs the seekbar,
+  // shows the trickplay preview). Defer to rAF to avoid useInsertionEffect
+  // warnings, matching the other gesture handlers.
+  const handleHoldDragStart = useCallback(() => {
+    lightHaptic();
+    requestAnimationFrame(() => {
+      onHoldSeekStart();
+    });
+  }, [lightHaptic, onHoldSeekStart]);
+
+  const handleHoldDragMove = useCallback(
+    (deltaX: number) => {
+      requestAnimationFrame(() => {
+        onHoldSeekMove(deltaX);
+      });
+    },
+    [onHoldSeekMove],
+  );
+
+  const handleHoldDragEnd = useCallback(
+    (deltaX: number) => {
+      requestAnimationFrame(() => {
+        onHoldSeekEnd(deltaX);
+      });
+    },
+    [onHoldSeekEnd],
+  );
+
   const handleVerticalDragStart = useCallback(
     (side: "left" | "right", startY: number) => {
       if (side === "left" && settings.enableLeftSideBrightnessSwipe) {
@@ -259,6 +294,15 @@ export const GestureOverlay = ({
       onTap: onToggleControls,
       onDoubleTapLeft: handleDoubleTapBackward,
       onDoubleTapRight: handleDoubleTapForward,
+      // While controls are hidden the system swipe-back gesture is active,
+      // so leave the left edge strip to it.
+      leftEdgeExclusionPx: showControls
+        ? 0
+        : CONTROLS_CONSTANTS.BACK_GESTURE_EDGE_EXCLUSION_PX,
+      holdDragEnabled: settings.enableHoldDragSeek,
+      onHoldDragStart: handleHoldDragStart,
+      onHoldDragMove: handleHoldDragMove,
+      onHoldDragEnd: handleHoldDragEnd,
       screenWidth,
       screenHeight,
     });

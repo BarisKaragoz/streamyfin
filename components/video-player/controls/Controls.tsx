@@ -4,7 +4,7 @@ import type {
   MediaSourceInfo,
 } from "@jellyfin/sdk/lib/generated-client";
 import { useLocalSearchParams } from "expo-router";
-import { type FC, useCallback, useEffect, useState } from "react";
+import { type FC, useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet, useWindowDimensions, View } from "react-native";
 import Animated, {
   Easing,
@@ -14,6 +14,7 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
+import { Text } from "@/components/common/Text";
 import ContinueWatchingOverlay from "@/components/video-player/controls/ContinueWatchingOverlay";
 import useRouter from "@/hooks/useAppRouter";
 import { useCreditSkipper } from "@/hooks/useCreditSkipper";
@@ -39,6 +40,7 @@ import { useVideoNavigation } from "./hooks/useVideoNavigation";
 import { useVideoSlider } from "./hooks/useVideoSlider";
 import { useVideoTime } from "./hooks/useVideoTime";
 import { TechnicalInfoOverlay } from "./TechnicalInfoOverlay";
+import { TrickplayBubble } from "./TrickplayBubble";
 import { useControlsTimeout } from "./useControlsTimeout";
 import { PlaybackSpeedScope } from "./utils/playback-speed-settings";
 import { type AspectRatio } from "./VideoScalingModeSelector";
@@ -263,6 +265,7 @@ export const Controls: FC<Props> = ({
     isSliding,
     time,
     handleSliderStart,
+    startScrub,
     handleTouchStart,
     handleTouchEnd,
     handleSliderComplete,
@@ -281,11 +284,19 @@ export const Controls: FC<Props> = ({
 
   const effectiveProgress = useSharedValue(0);
 
-  // Recompute progress whenever remote scrubbing is active or when progress significantly changes
+  // Hold-drag seek (Infuse-style scrubbing) state
+  const holdScrubProgress = useSharedValue(0);
+  const isHoldScrubbing = useSharedValue(false);
+  const [isHoldSeeking, setIsHoldSeeking] = useState(false);
+  const holdScrubStartMsRef = useRef(0);
+
+  // Recompute progress whenever scrubbing is active or when progress significantly changes
   useAnimatedReaction(
     () => ({
-      isScrubbing: isRemoteScrubbing.value,
-      scrub: remoteScrubProgress.value,
+      isScrubbing: isRemoteScrubbing.value || isHoldScrubbing.value,
+      scrub: isHoldScrubbing.value
+        ? holdScrubProgress.value
+        : remoteScrubProgress.value,
       actual: progress.value,
     }),
     (current, previous) => {
@@ -470,6 +481,73 @@ export const Controls: FC<Props> = ({
     disabled: true,
   });
 
+  // Maps horizontal drag distance to a seek offset. Quadratic curve: small
+  // drags give fine control, dragging further accelerates toward the max.
+  const computeHoldSeekOffsetMs = useCallback(
+    (deltaX: number) => {
+      const absX = Math.abs(deltaX);
+      if (absX <= CONTROLS_CONSTANTS.HOLD_DRAG_DEAD_ZONE_PX) return 0;
+      const maxDrag = screenWidth * CONTROLS_CONSTANTS.HOLD_DRAG_MAX_DRAG_RATIO;
+      const ratio = Math.min(
+        (absX - CONTROLS_CONSTANTS.HOLD_DRAG_DEAD_ZONE_PX) / maxDrag,
+        1,
+      );
+      const seconds =
+        ratio * ratio * CONTROLS_CONSTANTS.HOLD_DRAG_MAX_SEEK_SECONDS;
+      return Math.round(deltaX < 0 ? -seconds : seconds) * 1000;
+    },
+    [screenWidth],
+  );
+
+  const holdSeekTargetMs = useCallback(
+    (deltaX: number) =>
+      Math.min(
+        Math.max(
+          holdScrubStartMsRef.current + computeHoldSeekOffsetMs(deltaX),
+          0,
+        ),
+        maxMs,
+      ),
+    [computeHoldSeekOffsetMs, maxMs],
+  );
+
+  const handleHoldSeekStart = useCallback(() => {
+    holdScrubStartMsRef.current = progress.value;
+    startScrub();
+    holdScrubProgress.value = progress.value;
+    isHoldScrubbing.value = true;
+    setIsHoldSeeking(true);
+    setShowControls(true);
+    // Prime the trickplay preview + time at the current position
+    handleSliderChange(progress.value);
+  }, [
+    progress,
+    startScrub,
+    holdScrubProgress,
+    isHoldScrubbing,
+    setShowControls,
+    handleSliderChange,
+  ]);
+
+  const handleHoldSeekMove = useCallback(
+    (deltaX: number) => {
+      const target = holdSeekTargetMs(deltaX);
+      holdScrubProgress.value = target;
+      handleSliderChange(target);
+    },
+    [holdSeekTargetMs, holdScrubProgress, handleSliderChange],
+  );
+
+  const handleHoldSeekEnd = useCallback(
+    (deltaX: number) => {
+      const target = holdSeekTargetMs(deltaX);
+      isHoldScrubbing.value = false;
+      setIsHoldSeeking(false);
+      handleSliderComplete(target);
+    },
+    [holdSeekTargetMs, isHoldScrubbing, handleSliderComplete],
+  );
+
   const switchOnEpisodeMode = useCallback(() => {
     setEpisodeView(true);
     if (isPlaying) {
@@ -496,7 +574,57 @@ export const Controls: FC<Props> = ({
             onSkipBackward={handleSkipBackward}
             onDoubleTapForward={handleSkipForward}
             onDoubleTapBackward={handleSkipBackward}
+            onHoldSeekStart={handleHoldSeekStart}
+            onHoldSeekMove={handleHoldSeekMove}
+            onHoldSeekEnd={handleHoldSeekEnd}
           />
+          {/* Hold-drag seek: centered trickplay preview above the seekbar */}
+          {isHoldSeeking && (
+            <View
+              pointerEvents='none'
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 140,
+                alignItems: "center",
+                zIndex: 15,
+              }}
+            >
+              {trickPlayUrl && trickplayInfo ? (
+                <TrickplayBubble
+                  trickPlayUrl={trickPlayUrl}
+                  trickplayInfo={trickplayInfo}
+                  time={time}
+                  centered
+                />
+              ) : (
+                <View
+                  style={{
+                    backgroundColor: "rgba(0, 0, 0, 0.8)",
+                    paddingHorizontal: 16,
+                    paddingVertical: 8,
+                    borderRadius: 8,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "white",
+                      fontSize: 18,
+                      fontWeight: "600",
+                      fontVariant: ["tabular-nums"],
+                    }}
+                  >
+                    {`${time.hours > 0 ? `${time.hours}:` : ""}${time.minutes
+                      .toString()
+                      .padStart(2, "0")}:${time.seconds
+                      .toString()
+                      .padStart(2, "0")}`}
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
           {/* Technical Info Overlay - rendered outside animated views to stay visible */}
           {getTechnicalInfo && (
             <TechnicalInfoOverlay

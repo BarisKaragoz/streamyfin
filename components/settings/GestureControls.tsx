@@ -18,6 +18,7 @@ export const GestureControls: React.FC<Props> = ({ ...props }) => {
   const disabled = useMemo(
     () =>
       pluginSettings?.enableHorizontalSwipeSkip?.locked === true &&
+      pluginSettings?.enableHoldDragSeek?.locked === true &&
       pluginSettings?.enableLeftSideBrightnessSwipe?.locked === true &&
       pluginSettings?.enableRightSideVolumeSwipe?.locked === true &&
       pluginSettings?.hideVolumeSlider?.locked === true &&
@@ -44,6 +45,22 @@ export const GestureControls: React.FC<Props> = ({ ...props }) => {
             disabled={pluginSettings?.enableHorizontalSwipeSkip?.locked}
             onValueChange={(enableHorizontalSwipeSkip) =>
               updateSettings({ enableHorizontalSwipeSkip })
+            }
+          />
+        </ListItem>
+
+        <ListItem
+          title={t("home.settings.gesture_controls.hold_drag_seek")}
+          subtitle={t(
+            "home.settings.gesture_controls.hold_drag_seek_description",
+          )}
+          disabled={pluginSettings?.enableHoldDragSeek?.locked}
+        >
+          <Switch
+            value={settings.enableHoldDragSeek}
+            disabled={pluginSettings?.enableHoldDragSeek?.locked}
+            onValueChange={(enableHoldDragSeek) =>
+              updateSettings({ enableHoldDragSeek })
             }
           />
         </ListItem>

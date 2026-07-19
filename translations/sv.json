@@ -219,6 +219,8 @@
         "gesture_controls_title": "Gestkontroller",
         "horizontal_swipe_skip": "Horisontell Svepning för att Hoppa Fram/Bak",
         "horizontal_swipe_skip_description": "Svep vänster/höger när kontrollerna är dolda för att hoppa fram/tillbaka",
+        "hold_drag_seek": "Håll och Dra för att Spola",
+        "hold_drag_seek_description": "Tryck och håll, dra sedan vänster/höger för att spola. Dra längre för att spola längre",
         "left_side_brightness": "Vänster sida Ljusstyrkekontroll",
         "left_side_brightness_description": "Svep upp/nedåt på vänster sida för att justera ljusstyrkan",
         "right_side_volume": "Höger sida Volymkontroll",

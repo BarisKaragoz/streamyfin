@@ -463,6 +463,15 @@ export default function DirectPlayerPage() {
     };
   }, [navigation, stop]);
 
+  // Allow the iOS swipe-back gesture to exit the player only while the
+  // controls are hidden. When they're visible (including hold-drag seek,
+  // which shows them) the edge swipe stays disabled so it can't swallow
+  // in-player gestures. The gesture targets the parent route ("(auth)/player"
+  // in the root stack), hence getParent().
+  useEffect(() => {
+    navigation.getParent()?.setOptions({ gestureEnabled: !showControls });
+  }, [navigation, showControls]);
+
   const currentPlayStateInfo = useCallback(():
     | PlaybackProgressInfo
     | undefined => {

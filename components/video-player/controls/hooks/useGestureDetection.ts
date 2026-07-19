@@ -18,6 +18,14 @@ export interface SwipeGestureOptions {
   onTap?: () => void;
   onDoubleTapLeft?: () => void;
   onDoubleTapRight?: () => void;
+  /** Ignore touches starting within this many px of the left edge (0 = off).
+   * Used to leave room for the system swipe-back gesture. */
+  leftEdgeExclusionPx?: number;
+  holdDragEnabled?: boolean;
+  holdDuration?: number;
+  onHoldDragStart?: () => void;
+  onHoldDragMove?: (deltaX: number) => void;
+  onHoldDragEnd?: (deltaX: number) => void;
   screenWidth?: number;
   screenHeight?: number;
 }
@@ -34,6 +42,12 @@ export const useGestureDetection = ({
   onTap,
   onDoubleTapLeft,
   onDoubleTapRight,
+  leftEdgeExclusionPx = 0,
+  holdDragEnabled = false,
+  holdDuration = CONTROLS_CONSTANTS.HOLD_DRAG_ACTIVATE_MS,
+  onHoldDragStart,
+  onHoldDragMove,
+  onHoldDragEnd,
   screenWidth = 400,
   screenHeight = 800,
 }: SwipeGestureOptions = {}) => {
@@ -43,18 +57,28 @@ export const useGestureDetection = ({
   const isDragging = useRef(false);
   const dragSide = useRef<"left" | "right" | null>(null);
   const hasMovedEnough = useRef(false);
-  const gestureType = useRef<"none" | "horizontal" | "vertical">("none");
+  const gestureType = useRef<"none" | "horizontal" | "vertical" | "holdDrag">(
+    "none",
+  );
   const shouldIgnoreTouch = useRef(false);
   const lastTapTime = useRef(0);
   const lastTapSide = useRef<"left" | "right" | null>(null);
   const singleTapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const holdTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearSingleTapTimeout = useCallback(() => {
     if (singleTapTimeoutRef.current) {
       clearTimeout(singleTapTimeoutRef.current);
       singleTapTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearHoldTimeout = useCallback(() => {
+    if (holdTimeoutRef.current) {
+      clearTimeout(holdTimeoutRef.current);
+      holdTimeoutRef.current = null;
     }
   }, []);
 
@@ -66,19 +90,26 @@ export const useGestureDetection = ({
   useEffect(() => {
     return () => {
       clearSingleTapTimeout();
+      clearHoldTimeout();
     };
-  }, [clearSingleTapTimeout]);
+  }, [clearSingleTapTimeout, clearHoldTimeout]);
 
   const handleTouchStart = useCallback(
     (event: GestureResponderEvent) => {
       const startY = event.nativeEvent.pageY;
+      const startX = event.nativeEvent.pageX;
 
       // Define exclusion zones (15% from top and bottom)
       const topExclusionZone = screenHeight * 0.15;
       const bottomExclusionZone = screenHeight * 0.85;
 
-      // Check if touch started in exclusion zones
-      if (startY < topExclusionZone || startY > bottomExclusionZone) {
+      // Check if touch started in exclusion zones. The left-edge strip is
+      // reserved for the system swipe-back gesture when enabled.
+      if (
+        startY < topExclusionZone ||
+        startY > bottomExclusionZone ||
+        (leftEdgeExclusionPx > 0 && startX < leftEdgeExclusionPx)
+      ) {
         shouldIgnoreTouch.current = true;
         return;
       }
@@ -97,8 +128,31 @@ export const useGestureDetection = ({
       dragSide.current = null;
       hasMovedEnough.current = false;
       gestureType.current = "none";
+
+      // Tap-hold-drag seek: activate after holding still for holdDuration
+      clearHoldTimeout();
+      if (holdDragEnabled) {
+        holdTimeoutRef.current = setTimeout(() => {
+          holdTimeoutRef.current = null;
+          // Only activate if no other gesture has claimed this touch
+          if (gestureType.current !== "none") return;
+          clearSingleTapTimeout();
+          resetTapState();
+          gestureType.current = "holdDrag";
+          onHoldDragStart?.();
+        }, holdDuration);
+      }
     },
-    [screenHeight],
+    [
+      screenHeight,
+      leftEdgeExclusionPx,
+      holdDragEnabled,
+      holdDuration,
+      onHoldDragStart,
+      clearHoldTimeout,
+      clearSingleTapTimeout,
+      resetTapState,
+    ],
   );
 
   const handleTouchMove = useCallback(
@@ -119,6 +173,13 @@ export const useGestureDetection = ({
       const absY = Math.abs(deltaY);
       const totalDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 
+      // Hold-drag seek is active - all movement adjusts the seek offset
+      if (gestureType.current === "holdDrag") {
+        onHoldDragMove?.(deltaX);
+        lastTouchPosition.current = currentPosition;
+        return;
+      }
+
       // Lower threshold for starting gestures - make it more sensitive
       if (!hasMovedEnough.current && totalDistance > 8) {
         hasMovedEnough.current = true;
@@ -126,6 +187,7 @@ export const useGestureDetection = ({
         // Determine gesture type based on initial movement direction
         if (absY > absX && absY > 5) {
           // Vertical gesture - start drag immediately
+          clearHoldTimeout();
           clearSingleTapTimeout();
           resetTapState();
           gestureType.current = "vertical";
@@ -136,6 +198,7 @@ export const useGestureDetection = ({
           onVerticalDragStart?.(side, touchStartPosition.current.y);
         } else if (absX > absY && absX > 10) {
           // Horizontal gesture - mark for discrete swipe
+          clearHoldTimeout();
           clearSingleTapTimeout();
           resetTapState();
           gestureType.current = "horizontal";
@@ -159,7 +222,9 @@ export const useGestureDetection = ({
       lastTouchPosition.current = currentPosition;
     },
     [
+      clearHoldTimeout,
       clearSingleTapTimeout,
+      onHoldDragMove,
       onVerticalDragStart,
       onVerticalDragMove,
       resetTapState,
@@ -175,6 +240,8 @@ export const useGestureDetection = ({
         return;
       }
 
+      clearHoldTimeout();
+
       const touchEndTime = Date.now();
       const touchEndPosition = {
         x: event.nativeEvent.pageX,
@@ -187,6 +254,14 @@ export const useGestureDetection = ({
       const absX = Math.abs(deltaX);
       const absY = Math.abs(deltaY);
       const totalDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+      // Commit hold-drag seek on release
+      if (gestureType.current === "holdDrag") {
+        onHoldDragEnd?.(deltaX);
+        hasMovedEnough.current = false;
+        gestureType.current = "none";
+        return;
+      }
 
       // End vertical drag if we were dragging
       if (
@@ -257,12 +332,14 @@ export const useGestureDetection = ({
       gestureType.current = "none";
     },
     [
+      clearHoldTimeout,
       clearSingleTapTimeout,
       doubleTapDelay,
       onDoubleTapLeft,
       onDoubleTapRight,
       maxDuration,
       minDistance,
+      onHoldDragEnd,
       onSwipeLeft,
       onSwipeRight,
       onVerticalDragEnd,
