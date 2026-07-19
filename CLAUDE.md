@@ -39,6 +39,7 @@ Build/iOS:
 - `mpvkit-nettle-linker-warnings-harmless` | Release-link `_nettle_*` symbol warnings from prebuilt MPVKit are noise; ignore Pods/xcframework warnings
 - `creation-variant-first-build-signing` | Fork signing: upstream's appleTeamId AND published bundle ID are unusable — app.config.js overrides both (team G4V3C7URJ9, com.baris.streamyfin); wildcard-profile entitlement errors ⇒ run the :device script to mint a profile
 - `release-device-builds-use-no-bundler` | Release --device builds: add --no-bundler; log streamer otherwise hangs and swallows Ctrl+C
+- `moved-ios-folder-stale-local-state` | ios/ copied from another machine: stale .xcode.env.local NODE_BINARY path breaks builds; prefer prebuild over moving
 
 TV Platform:
 - `tv-modals-must-use-navigation-pattern` | Use atom+router.push(), never overlay/absolute modals
