@@ -437,6 +437,15 @@ function Layout() {
                                       // gesture only works while controls
                                       // are hidden.
                                       gestureEnabled: false,
+                                      // iOS 26's content pop gesture triggers
+                                      // from anywhere on screen; restrict it
+                                      // to the left edge so it can't swallow
+                                      // in-player gestures (hold-drag seek,
+                                      // swipe skip). start/end are an allowed
+                                      // x-range, so "end: 50" = only within
+                                      // 50pt of the left edge. Must match the
+                                      // player's BACK_GESTURE_EDGE_EXCLUSION_PX.
+                                      gestureResponseDistance: { end: 50 },
                                     }}
                                   />
                                   <Stack.Screen
