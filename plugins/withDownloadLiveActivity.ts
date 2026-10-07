@@ -219,6 +219,11 @@ const withDownloadLiveActivity: ConfigPlugin = (config) => {
         DOWNLOADS_APP_GROUP_IDENTIFIER: appGroupIdentifier,
         SUPPORTED_PLATFORMS: '"iphoneos iphonesimulator"',
         TARGETED_DEVICE_FAMILY: '"1,2"',
+        // Expo signs only the app target with ios.appleTeamId. EAS assigns the
+        // extension's team itself, but a local build has no team for it.
+        ...(config.ios?.appleTeamId && {
+          DEVELOPMENT_TEAM: config.ios.appleTeamId,
+        }),
       };
     }
 
