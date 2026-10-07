@@ -17,6 +17,7 @@ import { useControlsSafeAreaInsets } from "@/hooks/useControlsSafeAreaInsets";
 import { useDownload } from "@/providers/DownloadProvider";
 import { apiAtom, userAtom } from "@/providers/JellyfinProvider";
 import { useOfflineMode } from "@/providers/OfflineModeProvider";
+import { useSettings } from "@/utils/atoms/settings";
 import {
   getDownloadedEpisodesForSeason,
   getDownloadedSeasonNumbers,
@@ -42,6 +43,8 @@ const FOOTER_HEIGHT = 190;
 export const EpisodeList: React.FC<Props> = ({ item, close, goToItem }) => {
   const [api] = useAtom(apiAtom);
   const [user] = useAtom(userAtom);
+  const { settings } = useSettings();
+  const hideUnwatchedIndicators = settings.hideUnwatchedIndicators;
   const [seasonIndexState, setSeasonIndexState] = useAtom(seasonIndexAtom);
   const isOffline = useOfflineMode();
   const insets = useControlsSafeAreaInsets();
@@ -147,12 +150,13 @@ export const EpisodeList: React.FC<Props> = ({ item, close, goToItem }) => {
       kind: "wide",
       useEpisodePoster: true,
       selectedId: item.Id,
+      hideUnwatchedIndicators,
     });
     return base.map((card) => ({
       ...card,
       detail: runtimeTicksToSeconds(episodeById.get(card.id)?.RunTimeTicks),
     }));
-  }, [episodes, api, item.Id, episodeById]);
+  }, [episodes, api, item.Id, episodeById, hideUnwatchedIndicators]);
 
   const slots = useMemo(
     () => ({

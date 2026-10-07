@@ -14,6 +14,7 @@ import { Colors } from "@/constants/Colors";
 import { useDownload } from "@/providers/DownloadProvider";
 import { apiAtom, userAtom } from "@/providers/JellyfinProvider";
 import { useOfflineMode } from "@/providers/OfflineModeProvider";
+import { useSettings } from "@/utils/atoms/settings";
 import {
   buildOfflineSeasons,
   getDownloadedEpisodesForSeason,
@@ -38,6 +39,8 @@ export const seasonIndexAtom = atom<SeasonIndexState>({});
 export const SeasonPicker: React.FC<Props> = ({ item, initialSeasonIndex }) => {
   const [api] = useAtom(apiAtom);
   const [user] = useAtom(userAtom);
+  const { settings } = useSettings();
+  const hideUnwatchedIndicators = settings.hideUnwatchedIndicators;
   const [seasonIndexState, setSeasonIndexState] = useAtom(seasonIndexAtom);
   const { t } = useTranslation();
   const isOffline = useOfflineMode();
@@ -172,12 +175,13 @@ export const SeasonPicker: React.FC<Props> = ({ item, initialSeasonIndex }) => {
       api,
       kind: "rowWide",
       useEpisodePoster: true,
+      hideUnwatchedIndicators,
     });
     return base.map((card) => ({
       ...card,
       detail: runtimeTicksToSeconds(episodeById.get(card.id)?.RunTimeTicks),
     }));
-  }, [episodes, api, episodeById]);
+  }, [episodes, api, episodeById, hideUnwatchedIndicators]);
 
   const { cards, handlePress, handleLongPress, actionSheet } =
     useItemCardBehavior({

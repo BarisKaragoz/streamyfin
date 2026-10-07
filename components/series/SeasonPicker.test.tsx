@@ -27,6 +27,9 @@ jest.mock("@/providers/OfflineModeProvider", () => ({
 jest.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+jest.mock("@/utils/atoms/settings", () => ({
+  useSettings: () => ({ settings: { hideUnwatchedIndicators: false } }),
+}));
 // The rows and their menus are not what is under test; an episode shows up
 // as its name.
 jest.mock("../cards/useItemCardBehavior", () => ({

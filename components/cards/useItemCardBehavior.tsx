@@ -9,6 +9,7 @@ import {
 } from "@/components/common/TouchableItemRouter";
 import useRouter from "@/hooks/useAppRouter";
 import { apiAtom } from "@/providers/JellyfinProvider";
+import { useSettings } from "@/utils/atoms/settings";
 import { buildItemCards, type CardData, type CardKind } from "./CardData";
 
 type Options = {
@@ -55,6 +56,8 @@ export function useItemCardBehavior({
   enableActionSheet = false,
 }: Options) {
   const api = useAtomValue(apiAtom);
+  const { settings } = useSettings();
+  const hideUnwatchedIndicators = settings.hideUnwatchedIndicators;
   const router = useRouter();
   const segments = useSegments();
   const [actionSheetItem, setActionSheetItem] = useState<BaseItemDto | null>(
@@ -73,6 +76,7 @@ export function useItemCardBehavior({
         useEpisodePoster,
         showParentTitle,
         selectedId,
+        hideUnwatchedIndicators,
       }),
     [
       providedCards,
@@ -83,6 +87,7 @@ export function useItemCardBehavior({
       useEpisodePoster,
       showParentTitle,
       selectedId,
+      hideUnwatchedIndicators,
     ],
   );
 

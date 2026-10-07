@@ -25,8 +25,13 @@ const movie = {
 
 const imageUrlOf = (
   item: BaseItemDto,
-  options: Omit<Parameters<typeof buildItemCards>[1], "api">,
-) => buildItemCards([item], { api, ...options })[0].imageUrl ?? "";
+  options: Omit<
+    Parameters<typeof buildItemCards>[1],
+    "api" | "hideUnwatchedIndicators"
+  >,
+) =>
+  buildItemCards([item], { api, hideUnwatchedIndicators: false, ...options })[0]
+    .imageUrl ?? "";
 
 const sizeOf = (url: string) => {
   const params = new URL(url).searchParams;
@@ -223,6 +228,7 @@ describe("buildItemCards parent-first labels", () => {
         api,
         kind: "wide",
         showParentTitle: true,
+        hideUnwatchedIndicators: false,
       });
 
       expect(card).toMatchObject(expected);
@@ -241,12 +247,63 @@ describe("buildItemCards parent-first labels", () => {
           IndexNumber: 4,
         },
       ],
-      { api, kind: "wide", showParentTitle: false },
+      {
+        api,
+        kind: "wide",
+        showParentTitle: false,
+        hideUnwatchedIndicators: false,
+      },
     );
 
     expect(card).toMatchObject({
       title: "The Episode",
       subtitle: "S2:E4 - Example Show",
     });
+  });
+});
+
+// The card redesign (#1984) came in through the v0.55.1 sync without this
+// fork's hideUnwatchedIndicators setting, so every mobile row kept drawing the
+// dot and the count with the setting on.
+describe("buildItemCards unwatched indicators", () => {
+  const unwatchedMovie = {
+    ...movie,
+    UserData: { Played: false },
+  } satisfies BaseItemDto;
+  const seriesWithEpisodesLeft = {
+    Id: "series-1",
+    Type: "Series",
+    Name: "Example Show",
+    UserData: { Played: false, UnplayedItemCount: 4 },
+  } satisfies BaseItemDto;
+
+  const cardsFor = (hideUnwatchedIndicators: boolean) =>
+    buildItemCards([unwatchedMovie, seriesWithEpisodesLeft], {
+      api,
+      kind: "portrait",
+      hideUnwatchedIndicators,
+    });
+
+  test("marks an unwatched movie and counts a series' episodes left", () => {
+    const [movieCard, seriesCard] = cardsFor(false);
+
+    expect(movieCard.unwatched).toBe(true);
+    expect(seriesCard.unplayedCount).toBe(4);
+  });
+
+  test("drops the dot and the count when the setting hides them", () => {
+    const [movieCard, seriesCard] = cardsFor(true);
+
+    expect(movieCard.unwatched).toBe(false);
+    expect(seriesCard.unplayedCount).toBe(0);
+  });
+
+  test("keeps the progress bar, which is not an unwatched indicator", () => {
+    const [card] = buildItemCards(
+      [{ ...movie, UserData: { Played: false, PlayedPercentage: 40 } }],
+      { api, kind: "wide", hideUnwatchedIndicators: true },
+    );
+
+    expect(card.progress).toBeCloseTo(0.4);
   });
 });

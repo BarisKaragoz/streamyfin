@@ -223,6 +223,12 @@ type BuildOptions = {
   showParentTitle?: boolean;
   /** Item to keep at full opacity; every other card is faded back. */
   selectedId?: string | null;
+  /**
+   * The user's `hideUnwatchedIndicators` setting: drops the unwatched dot and
+   * the unplayed count. Required, not defaulted, so a new caller cannot leave
+   * the setting out; the card redesign did exactly that and the dots came back.
+   */
+  hideUnwatchedIndicators: boolean;
 };
 
 /**
@@ -238,6 +244,7 @@ export function buildItemCards(
     useEpisodePoster = false,
     showParentTitle = false,
     selectedId,
+    hideUnwatchedIndicators,
   }: BuildOptions,
 ): CardData[] {
   if (!api) return [];
@@ -269,9 +276,14 @@ export function buildItemCards(
 
     const progress = itemProgressFraction(item);
     // Strict === false: items without UserData (unknown state) get no dot.
-    const unwatched = isMovieOrEpisode(item) && item.UserData?.Played === false;
+    const unwatched =
+      !hideUnwatchedIndicators &&
+      isMovieOrEpisode(item) &&
+      item.UserData?.Played === false;
     const unplayedCount =
-      isAggregate(item) && !item.UserData?.Played ? unplayed : 0;
+      !hideUnwatchedIndicators && isAggregate(item) && !item.UserData?.Played
+        ? unplayed
+        : 0;
     const dimmed = selectedId != null && item.Id !== selectedId;
     // Only portrait rows and grids mix in items without a poster.
     const aspectRatio =

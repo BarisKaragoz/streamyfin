@@ -31,6 +31,10 @@ jest.mock("@/components/common/ItemActionSheetHost", () => ({
   ItemActionSheetHost: () => null,
 }));
 jest.mock("./Card", () => ({ Card: () => null }));
+const mockSettings = { hideUnwatchedIndicators: false };
+jest.mock("@/utils/atoms/settings", () => ({
+  useSettings: () => ({ settings: mockSettings }),
+}));
 
 const MOVIE: BaseItemDto = {
   Id: "movie-1",
@@ -51,6 +55,7 @@ const fillWidthOf = async (columns: number) => {
 
 afterEach(() => {
   jest.restoreAllMocks();
+  mockSettings.hideUnwatchedIndicators = false;
 });
 
 // Issue #2166: a grid sizes its cards by the column count, but the artwork was
@@ -63,5 +68,31 @@ describe("useCardGrid artwork size", () => {
     expect(await fillWidthOf(2)).toBe("600");
     // Over three: 126 points.
     expect(await fillWidthOf(3)).toBe("400");
+  });
+});
+
+// The grids and rows build their cards here, and the card redesign (#1984)
+// arrived without reading the setting, so the dot stayed with it switched on.
+describe("useCardGrid unwatched indicators", () => {
+  const unwatchedMovie: BaseItemDto = {
+    ...MOVIE,
+    UserData: { Played: false },
+  };
+
+  const unwatchedOf = async () => {
+    const { result } = await renderHook(() =>
+      useCardGrid({ items: [unwatchedMovie], columns: 3 }),
+    );
+    return result.current.data[0].unwatched;
+  };
+
+  test("marks an unwatched movie by default", async () => {
+    expect(await unwatchedOf()).toBe(true);
+  });
+
+  test("hides the mark when the user hides unwatched indicators", async () => {
+    mockSettings.hideUnwatchedIndicators = true;
+
+    expect(await unwatchedOf()).toBe(false);
   });
 });
