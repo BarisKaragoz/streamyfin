@@ -6,13 +6,15 @@ import {
   BottomSheetView,
 } from "@gorhom/bottom-sheet";
 import type { BaseItemDto } from "@jellyfin/sdk/lib/generated-client/models";
-import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Alert, StyleSheet, TouchableOpacity, View } from "react-native";
+import { StyleSheet, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Text } from "@/components/common/Text";
 import useRouter from "@/hooks/useAppRouter";
+import { useConfirmDelete } from "@/hooks/useConfirmDelete";
 import { useDeletePlaylist } from "@/hooks/usePlaylistMutations";
+import { useSheetOpenState } from "@/hooks/useSheetOpenState";
 
 interface Props {
   open: boolean;
@@ -30,13 +32,11 @@ export const PlaylistOptionsSheet: React.FC<Props> = ({
   const insets = useSafeAreaInsets();
   const { t } = useTranslation();
   const deletePlaylist = useDeletePlaylist();
+  const confirmDelete = useConfirmDelete();
 
   const snapPoints = useMemo(() => ["25%"], []);
 
-  useEffect(() => {
-    if (open) bottomSheetModalRef.current?.present();
-    else bottomSheetModalRef.current?.dismiss();
-  }, [open]);
+  const handleDismissed = useSheetOpenState(bottomSheetModalRef, open);
 
   const handleSheetChanges = useCallback(
     (index: number) => {
@@ -61,38 +61,29 @@ export const PlaylistOptionsSheet: React.FC<Props> = ({
   const handleDeletePlaylist = useCallback(() => {
     if (!playlist?.Id) return;
 
-    Alert.alert(
-      t("music.playlists.delete_playlist"),
-      t("music.playlists.delete_confirm", { name: playlist.Name }),
-      [
-        {
-          text: t("common.cancel"),
-          style: "cancel",
-        },
-        {
-          text: t("common.delete"),
-          style: "destructive",
-          onPress: () => {
-            deletePlaylist.mutate(
-              { playlistId: playlist.Id! },
-              {
-                onSuccess: () => {
-                  setOpen(false);
-                  router.back();
-                },
-              },
-            );
+    confirmDelete({
+      title: t("music.playlists.delete_playlist"),
+      message: t("music.playlists.delete_confirm", { name: playlist.Name }),
+      onConfirm: () => {
+        deletePlaylist.mutate(
+          { playlistId: playlist.Id! },
+          {
+            onSuccess: () => {
+              setOpen(false);
+              router.back();
+            },
           },
-        },
-      ],
-    );
-  }, [playlist, deletePlaylist, setOpen, router, t]);
+        );
+      },
+    });
+  }, [playlist, deletePlaylist, setOpen, router, t, confirmDelete]);
 
   if (!playlist) return null;
 
   return (
     <BottomSheetModal
       ref={bottomSheetModalRef}
+      onDismiss={handleDismissed}
       index={0}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}

@@ -1,9 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { BaseItemDto } from "@jellyfin/sdk/lib/generated-client/models";
-import { Image, type ImageProps } from "expo-image";
+import type { ImageProps } from "expo-image";
 import { useAtom } from "jotai";
 import { type FC, useMemo } from "react";
 import { View, type ViewProps } from "react-native";
+import { Image } from "@/components/common/ServerImage";
 import { apiAtom } from "@/providers/JellyfinProvider";
 import { getItemImage } from "@/utils/getItemImage";
 
@@ -20,7 +21,13 @@ interface Props extends ImageProps {
     | "Screenshot"
     | "Thumb";
   quality?: number;
+  /** Requested image width in physical pixels, not layout points. */
   width?: number;
+  /**
+   * Height of the box the image covers, in physical pixels. Pass it with
+   * `width` for a cover fit image, so the request is sized to the box.
+   */
+  height?: number;
   onError?: () => void;
 }
 
@@ -29,6 +36,7 @@ export const ItemImage: FC<Props> = ({
   variant = "Primary",
   quality = 90,
   width = 1000,
+  height,
   onError,
   ...props
 }) => {
@@ -45,8 +53,9 @@ export const ItemImage: FC<Props> = ({
       variant,
       quality,
       width,
+      height,
     });
-  }, [api, item, quality, variant, width]);
+  }, [api, item, quality, variant, width, height]);
 
   // return placeholder icon if no source
   if (!source?.uri)
@@ -75,9 +84,9 @@ export const ItemImage: FC<Props> = ({
         width: "100%",
         height: "100%",
       }}
-      source={{
-        uri: source?.uri,
-      }}
+      // Pass the uri only: ServerImage resolves the server's proxy auth headers
+      // from it (and re-resolves them when the custom headers change).
+      source={source?.uri}
       {...props}
     />
   );

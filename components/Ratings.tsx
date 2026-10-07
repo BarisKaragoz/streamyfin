@@ -4,24 +4,31 @@ import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { useMemo } from "react";
 import { View, type ViewProps } from "react-native";
-import { useJellyseerr } from "@/hooks/useJellyseerr";
-import { MediaType } from "@/utils/jellyseerr/server/constants/media";
-import type { MovieDetails } from "@/utils/jellyseerr/server/models/Movie";
+import { useSeerr } from "@/hooks/useSeerr";
 import type {
+  MovieDetails,
   MovieResult,
+  TvDetails,
   TvResult,
-} from "@/utils/jellyseerr/server/models/Search";
-import type { TvDetails } from "@/utils/jellyseerr/server/models/Tv";
+} from "@/utils/seerr/types";
+import { MediaType } from "@/utils/seerr/types";
+import { AwardsBadge } from "./AwardsBadge";
 import { Badge } from "./Badge";
 
 interface Props extends ViewProps {
   item?: BaseItemDto | null;
 }
 
-export const Ratings: React.FC<Props> = ({ item, ...props }) => {
+export const Ratings: React.FC<Props> = ({ item, className, ...props }) => {
   if (!item) return null;
   return (
-    <View className='flex flex-row items-center mt-2 space-x-2' {...props}>
+    // The caller's className is appended, not spread over the top: spreading
+    // props last replaces this one outright, which cost the row its layout and
+    // let the badges ride up over whatever sat above them.
+    <View
+      {...props}
+      className={`flex flex-row flex-wrap items-center mt-2 gap-2 ${className ?? ""}`}
+    >
       {item.OfficialRating && (
         <Badge text={item.OfficialRating} variant='gray' />
       )}
@@ -40,8 +47,8 @@ export const Ratings: React.FC<Props> = ({ item, ...props }) => {
             <Image
               source={
                 item.CriticRating < 60
-                  ? require("@/assets/images/rotten-tomatoes.png")
-                  : require("@/assets/images/not-rotten-tomatoes.svg")
+                  ? require("@/assets/images/rt_rotten.svg")
+                  : require("@/assets/images/rt_fresh.svg")
               }
               style={{
                 width: 14,
@@ -51,27 +58,28 @@ export const Ratings: React.FC<Props> = ({ item, ...props }) => {
           }
         />
       )}
+      <AwardsBadge item={item} />
     </View>
   );
 };
 
-export const JellyserrRatings: React.FC<{
+export const SeerrRatings: React.FC<{
   result: MovieResult | TvResult | TvDetails | MovieDetails;
 }> = ({ result }) => {
-  const { jellyseerrApi, getMediaType } = useJellyseerr();
+  const { seerrApi, getMediaType } = useSeerr();
 
   const mediaType = useMemo(() => getMediaType(result), [result]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["jellyseerr", result.id, mediaType, "ratings"],
+    queryKey: ["seerr", result.id, mediaType, "ratings"],
     queryFn: async () => {
       return mediaType === MediaType.MOVIE
-        ? jellyseerrApi?.movieRatings(result.id)
-        : jellyseerrApi?.tvRatings(result.id);
+        ? seerrApi?.movieRatings(result.id)
+        : seerrApi?.tvRatings(result.id);
     },
     staleTime: (5).minutesToMilliseconds(),
     retry: false,
-    enabled: !!jellyseerrApi,
+    enabled: !!seerrApi,
   });
 
   return (
@@ -89,8 +97,8 @@ export const JellyserrRatings: React.FC<{
                 className='mr-1'
                 source={
                   data?.criticsRating === "Rotten"
-                    ? require("@/utils/jellyseerr/src/assets/rt_rotten.svg")
-                    : require("@/utils/jellyseerr/src/assets/rt_fresh.svg")
+                    ? require("@/assets/images/rt_rotten.svg")
+                    : require("@/assets/images/rt_fresh.svg")
                 }
                 style={{
                   width: 14,
@@ -109,8 +117,8 @@ export const JellyserrRatings: React.FC<{
                 className='mr-1'
                 source={
                   data?.audienceRating === "Spilled"
-                    ? require("@/utils/jellyseerr/src/assets/rt_aud_rotten.svg")
-                    : require("@/utils/jellyseerr/src/assets/rt_aud_fresh.svg")
+                    ? require("@/assets/images/rt_aud_rotten.svg")
+                    : require("@/assets/images/rt_aud_fresh.svg")
                 }
                 style={{
                   width: 14,
@@ -120,14 +128,16 @@ export const JellyserrRatings: React.FC<{
             }
           />
         )}
-        {!!result.voteCount && (
+        {!!result.voteCount && result.voteAverage !== undefined && (
           <Badge
             text={`${Math.round(result.voteAverage * 10)}%`}
             variant='gray'
             iconLeft={
               <Image
                 className='mr-1'
-                source={require("@/utils/jellyseerr/src/assets/tmdb_logo.svg")}
+                source={require("@/assets/images/tmdb_logo.svg")}
+                // The logo is wider than tall: cover, the default, cut it.
+                contentFit='contain'
                 style={{
                   width: 14,
                   height: 14,

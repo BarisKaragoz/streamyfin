@@ -6,6 +6,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -13,11 +14,13 @@ import { useWifiSSID } from "@/hooks/useWifiSSID";
 import { apiAtom, useJellyfin } from "@/providers/JellyfinProvider";
 import { storage } from "@/utils/mmkv";
 import { getServerLocalConfig } from "@/utils/secureCredentials";
+import { isHttpUrl } from "@/utils/serverUrl/candidates";
 
 interface ServerUrlContextValue {
   effectiveServerUrl: string | null;
   isUsingLocalUrl: boolean;
   currentSSID: string | null;
+  connectedToWifi: boolean;
   refreshUrlState: () => void;
 }
 
@@ -32,7 +35,7 @@ interface Props {
 export function ServerUrlProvider({ children }: Props): React.ReactElement {
   const api = useAtomValue(apiAtom);
   const { switchServerUrl } = useJellyfin();
-  const { ssid, permissionStatus } = useWifiSSID();
+  const { ssid, connectedToWifi, permissionStatus } = useWifiSSID();
 
   const [isUsingLocalUrl, setIsUsingLocalUrl] = useState(false);
   const [effectiveServerUrl, setEffectiveServerUrl] = useState<string | null>(
@@ -60,9 +63,13 @@ export function ServerUrlProvider({ children }: Props): React.ReactElement {
     if (!remoteUrl || !switchServerUrl) return;
 
     const config = getServerLocalConfig(remoteUrl);
+    // Installs hold local URLs saved before the settings field checked them,
+    // some without a scheme. One of those as the API base path fails every
+    // request and crashed the app at launch, so it is never switched to: the
+    // remote URL keeps the app working, and the settings screen flags it.
     const shouldUseLocal = Boolean(
       config?.enabled &&
-        config.localUrl &&
+        isHttpUrl(config.localUrl) &&
         ssid !== null &&
         config.homeWifiSSIDs.includes(ssid),
     );
@@ -101,15 +108,25 @@ export function ServerUrlProvider({ children }: Props): React.ReactElement {
     };
   }, [ssid, permissionStatus, evaluateAndSwitchUrl]);
 
+  const value = useMemo(
+    () => ({
+      effectiveServerUrl,
+      isUsingLocalUrl,
+      currentSSID: ssid,
+      connectedToWifi,
+      refreshUrlState,
+    }),
+    [
+      effectiveServerUrl,
+      isUsingLocalUrl,
+      ssid,
+      connectedToWifi,
+      refreshUrlState,
+    ],
+  );
+
   return (
-    <ServerUrlContext.Provider
-      value={{
-        effectiveServerUrl,
-        isUsingLocalUrl,
-        currentSSID: ssid,
-        refreshUrlState,
-      }}
-    >
+    <ServerUrlContext.Provider value={value}>
       {children}
     </ServerUrlContext.Provider>
   );

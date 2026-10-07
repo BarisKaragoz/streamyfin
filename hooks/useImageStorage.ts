@@ -1,7 +1,15 @@
+import { File, Paths } from "expo-file-system";
+import { useAtomValue } from "jotai";
 import { useCallback } from "react";
+import { apiAtom } from "@/providers/JellyfinProvider";
+import {
+  getJellyfinHeadersForUrl,
+  optionsWithOptionalHeaders,
+} from "@/utils/customHeaders";
 import { storage } from "@/utils/mmkv";
 
 const useImageStorage = () => {
+  const api = useAtomValue(apiAtom);
   const saveBase64Image = useCallback(async (base64: string, key: string) => {
     try {
       // Save the base64 string to storage
@@ -12,37 +20,35 @@ const useImageStorage = () => {
     }
   }, []);
 
-  const image2Base64 = useCallback(async (url?: string | null) => {
-    if (!url) return null;
+  /**
+   * expo-file-system instead of fetch+Blob+FileReader: the latter silently
+   * resolves to an empty payload under RN's New Architecture.
+   */
+  const image2Base64 = useCallback(
+    async (url?: string | null) => {
+      if (!url) return null;
 
-    let blob: Blob;
-    try {
-      // Fetch the data from the URL
-      const response = await fetch(url);
-      blob = await response.blob();
-    } catch (error) {
-      console.warn("Error fetching image:", error);
-      return null;
-    }
-
-    // Create a FileReader instance
-    const reader = new FileReader();
-
-    // Convert blob to base64
-    return new Promise<string>((resolve, reject) => {
-      reader.onloadend = () => {
-        if (typeof reader.result === "string") {
-          // Extract the base64 string (remove the data URL prefix)
-          const base64 = reader.result.split(",")[1];
-          resolve(base64);
-        } else {
-          reject(new Error("Failed to convert image to base64"));
-        }
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }, []);
+      const headers = getJellyfinHeadersForUrl(url, api?.basePath);
+      const tmpFile = new File(
+        Paths.cache,
+        `img-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`,
+      );
+      try {
+        const downloaded = await File.downloadFileAsync(
+          url,
+          tmpFile,
+          optionsWithOptionalHeaders({ idempotent: true }, headers),
+        );
+        return await downloaded.base64();
+      } catch (error) {
+        console.warn("Error fetching image:", error);
+        return null;
+      } finally {
+        if (tmpFile.exists) tmpFile.delete();
+      }
+    },
+    [api?.basePath],
+  );
 
   const saveImage = useCallback(
     async (key?: string | null, imageUrl?: string | null) => {
@@ -62,7 +68,7 @@ const useImageStorage = () => {
         console.warn("Error saving image:", error);
       }
     },
-    [],
+    [image2Base64, saveBase64Image],
   );
 
   const loadImage = useCallback(async (key: string) => {

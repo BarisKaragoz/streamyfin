@@ -1,30 +1,25 @@
 # Dependencies and Package Managers
 node_modules/
-bun.lock
 bun.lockb
 package-lock.json
 
 # Expo and React Native Build Artifacts
 .expo/
 dist/
+dist-web/
+desktop/
 web-build/
 .tsbuildinfo
 
 # Platform-specific Build Directories
 /ios
 /android
-/iostv
-/iosmobile
-/androidmobile
-/androidtv
 
 # Gradle caches (top-level + per-module native projects)
 **/.gradle/
 
-# Module-specific Builds
-modules/mpv-player/android/build
-modules/player/android
-modules/hls-downloader/android/build
+# Native module build outputs (any module)
+modules/*/android/build/
 
 # Generated Applications
 Streamyfin.app
@@ -43,6 +38,9 @@ Streamyfin.app
 npm-debug.*
 *.orig.*
 *.mp4
+# Tracked on purpose (subtitle preview sample). EAS archives the project with
+# these rules applied even to tracked files, so it must be re-included here.
+!assets/sample_subtitled.mp4
 
 # OS-specific Files
 # macOS
@@ -69,17 +67,22 @@ certs/
 
 # Version and Backup Files
 /version-backup-*
-/modules/sf-player/android/build
-/modules/music-controls/android/build
-modules/background-downloader/android/build/*
-/modules/mpv-player/android/build
 
 # ios:unsigned-build Artifacts
 build/
 # but keep EAS custom build configs (the generic build/ rule above matches .eas/build/)
 !.eas/build/
 !.eas/build/**
-.claude/
+# Jest coverage reports
+coverage/
+
+# Claude Code: the shared conventions are tracked so a new learned fact or agent
+# reaches the repo; everything else under .claude/ is per-machine state.
+.claude/*
+!.claude/agents/
+!.claude/commands/
+!.claude/learned-facts/
+!.claude/learned-facts.md
 .agents/skills/**
 skills-lock.json
 

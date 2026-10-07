@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
   Animated,
   Easing,
+  InteractionManager,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -31,6 +32,7 @@ import {
 import { useTVBackPress } from "@/hooks/useTVBackPress";
 import { useSettings } from "@/utils/atoms/settings";
 import { tvSubtitleModalAtom } from "@/utils/atoms/tvSubtitleModal";
+import { subtitleSearchErrorMessage } from "@/utils/jellyfin/subtitleSearchAccess";
 import { COMMON_SUBTITLE_LANGUAGES } from "@/utils/opensubtitles/api";
 import { scaleSize } from "@/utils/scaleSize";
 import { store } from "@/utils/store";
@@ -192,6 +194,7 @@ const SubtitleResultCard = React.forwardRef<
 >(({ result, hasTVPreferredFocus, isDownloading, onPress }, ref) => {
   const { focused, handleFocus, handleBlur, animatedStyle } =
     useTVFocusAnimation({ scaleAmount: 1.03 });
+  const { t } = useTranslation();
 
   return (
     <Pressable
@@ -328,7 +331,7 @@ const SubtitleResultCard = React.forwardRef<
               ]}
             >
               <Text style={[styles.flagText, { fontSize: scaleSize(10) }]}>
-                Hash Match
+                {t("player.hash_match")}
               </Text>
             </View>
           )}
@@ -444,14 +447,14 @@ const TVStepperControl: React.FC<{
 
   const handleDecrease = () => {
     if (canDecrease) {
-      const newValue = Math.max(min, Math.round((value - step) * 10) / 10);
+      const newValue = Math.max(min, Math.round((value - step) * 100) / 100);
       onChange(newValue);
     }
   };
 
   const handleIncrease = () => {
     if (canIncrease) {
-      const newValue = Math.min(max, Math.round((value + step) * 10) / 10);
+      const newValue = Math.min(max, Math.round((value + step) * 100) / 100);
       onChange(newValue);
     }
   };
@@ -537,6 +540,9 @@ export default function TVSubtitleModal() {
   const typography = useScaledTVTypography();
 
   const [activeTab, setActiveTab] = useState<TabType>("tracks");
+  const [subtitleDelay, setSubtitleDelay] = useState(
+    modalState?.subtitleDelay ?? 0,
+  );
   const [selectedLanguage, setSelectedLanguage] = useState("eng");
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [hasSearchedThisSession, setHasSearchedThisSession] = useState(false);
@@ -645,10 +651,23 @@ export default function TVSubtitleModal() {
 
   const handleTrackSelect = useCallback(
     (option: { setTrack?: () => void }) => {
+      if (modalState?.deferApplyUntilDismissed) {
+        // Player: setTrack can navigate (replacePlayer for a burn-in switch
+        // while transcoding); a router.replace fired while this modal is the
+        // active route targets the MODAL and is swallowed. Close FIRST, apply
+        // after dismissal.
+        handleClose();
+        InteractionManager.runAfterInteractions(() => option.setTrack?.());
+        return;
+      }
+      // Detail page: setTrack only updates state. Run it BEFORE closing so the
+      // re-render happens while the modal is up; deferring it until after
+      // dismissal re-renders the detail page after focus returns and yanks TV
+      // focus, leaving navigation stuck.
       option.setTrack?.();
       handleClose();
     },
-    [handleClose],
+    [handleClose, modalState?.deferApplyUntilDismissed],
   );
 
   const handleDownload = useCallback(
@@ -892,10 +911,11 @@ export default function TVSubtitleModal() {
                       <Text
                         style={[styles.errorHint, { fontSize: scaleSize(13) }]}
                       >
-                        {!hasOpenSubtitlesApiKey
-                          ? t("player.no_subtitle_provider") ||
-                            "No subtitle provider configured on server"
-                          : String(searchError)}
+                        {subtitleSearchErrorMessage(
+                          searchError,
+                          hasOpenSubtitlesApiKey,
+                          t,
+                        )}
                       </Text>
                     </View>
                   )}
@@ -979,14 +999,14 @@ export default function TVSubtitleModal() {
                   {/* Subtitle Scale */}
                   <View style={styles.settingRow}>
                     <TVStepperControl
-                      value={settings.mpvSubtitleScale ?? 1.0}
+                      value={settings.subtitleSize}
                       min={0.1}
                       max={3.0}
                       step={0.1}
                       formatValue={(v) => `${v.toFixed(1)}x`}
                       onChange={(newValue) => {
                         updateSettings({
-                          mpvSubtitleScale: Math.round(newValue * 10) / 10,
+                          subtitleSize: Math.round(newValue * 10) / 10,
                         });
                       }}
                       hasTVPreferredFocus={true}
@@ -997,21 +1017,46 @@ export default function TVSubtitleModal() {
                         { fontSize: typography.callout },
                       ]}
                     >
-                      {t("home.settings.subtitles.mpv_subtitle_scale") ||
-                        "Subtitle Scale"}
+                      {t("home.settings.subtitles.subtitle_size")}
                     </Text>
                   </View>
+
+                  {modalState?.onSubtitleDelayChange && (
+                    <View style={styles.settingRow}>
+                      <TVStepperControl
+                        value={subtitleDelay}
+                        min={-5}
+                        max={5}
+                        step={0.25}
+                        formatValue={(value) =>
+                          `${value > 0 ? "+" : ""}${Number(value.toFixed(2))} s`
+                        }
+                        onChange={(value) => {
+                          setSubtitleDelay(value);
+                          modalState.onSubtitleDelayChange?.(value);
+                        }}
+                      />
+                      <Text
+                        style={[
+                          styles.settingLabel,
+                          { fontSize: typography.callout },
+                        ]}
+                      >
+                        {t("player.subtitle_sync")}
+                      </Text>
+                    </View>
+                  )}
 
                   {/* Vertical Margin */}
                   <View style={styles.settingRow}>
                     <TVStepperControl
-                      value={settings.mpvSubtitleMarginY ?? 0}
+                      value={settings.subtitleMarginY ?? 0}
                       min={-100}
                       max={100}
                       step={5}
                       formatValue={(v) => `${v}`}
                       onChange={(newValue) => {
-                        updateSettings({ mpvSubtitleMarginY: newValue });
+                        updateSettings({ subtitleMarginY: newValue });
                       }}
                     />
                     <Text
@@ -1020,8 +1065,7 @@ export default function TVSubtitleModal() {
                         { fontSize: typography.callout },
                       ]}
                     >
-                      {t("home.settings.subtitles.mpv_subtitle_margin_y") ||
-                        "Vertical Margin"}
+                      {t("home.settings.subtitles.subtitle_margin_y")}
                     </Text>
                   </View>
 
@@ -1035,10 +1079,10 @@ export default function TVSubtitleModal() {
                             t(`home.settings.subtitles.align.${align}`) || align
                           }
                           selected={
-                            (settings.mpvSubtitleAlignX ?? "center") === align
+                            (settings.subtitleAlignX ?? "center") === align
                           }
                           onPress={() =>
-                            updateSettings({ mpvSubtitleAlignX: align })
+                            updateSettings({ subtitleAlignX: align })
                           }
                         />
                       ))}
@@ -1049,8 +1093,7 @@ export default function TVSubtitleModal() {
                         { fontSize: typography.callout },
                       ]}
                     >
-                      {t("home.settings.subtitles.mpv_subtitle_align_x") ||
-                        "Horizontal Align"}
+                      {t("home.settings.subtitles.subtitle_align_x")}
                     </Text>
                   </View>
 
@@ -1064,10 +1107,10 @@ export default function TVSubtitleModal() {
                             t(`home.settings.subtitles.align.${align}`) || align
                           }
                           selected={
-                            (settings.mpvSubtitleAlignY ?? "bottom") === align
+                            (settings.subtitleAlignY ?? "bottom") === align
                           }
                           onPress={() =>
-                            updateSettings({ mpvSubtitleAlignY: align })
+                            updateSettings({ subtitleAlignY: align })
                           }
                         />
                       ))}
@@ -1078,8 +1121,7 @@ export default function TVSubtitleModal() {
                         { fontSize: typography.callout },
                       ]}
                     >
-                      {t("home.settings.subtitles.mpv_subtitle_align_y") ||
-                        "Vertical Align"}
+                      {t("home.settings.subtitles.subtitle_align_y")}
                     </Text>
                   </View>
                 </ScrollView>

@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { t } from "i18next";
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
   TouchableOpacity,
@@ -15,7 +15,7 @@ import { useNetworkAwareQueryClient } from "@/hooks/useNetworkAwareQueryClient";
 import { useDownload } from "@/providers/DownloadProvider";
 import { calculateSmoothedETA } from "@/providers/Downloads/hooks/useDownloadSpeedCalculator";
 import { JobStatus } from "@/providers/Downloads/types";
-import { estimateDownloadSize } from "@/utils/download";
+import { estimateTranscodeSize } from "@/utils/downloadSize";
 import { storage } from "@/utils/mmkv";
 import { formatTimeString } from "@/utils/time";
 
@@ -35,6 +35,7 @@ interface DownloadCardProps extends TouchableOpacityProps {
 }
 
 export const DownloadCard = ({ process, ...props }: DownloadCardProps) => {
+  const { t } = useTranslation();
   const { cancelDownload } = useDownload();
   const router = useRouter();
   const queryClient = useNetworkAwareQueryClient();
@@ -72,17 +73,14 @@ export const DownloadCard = ({ process, ...props }: DownloadCardProps) => {
     if (process?.estimatedTotalSizeBytes)
       return process.estimatedTotalSizeBytes;
 
-    // Calculate from bitrate + duration (only if bitrate value is defined)
-    if (process?.maxBitrate?.value && process?.item?.RunTimeTicks) {
-      return estimateDownloadSize(
-        process.maxBitrate.value,
-        process.item.RunTimeTicks,
-      );
-    }
-
-    return undefined;
+    return estimateTranscodeSize(
+      process?.maxBitrate?.value,
+      process?.mediaSource?.Bitrate,
+      process?.item?.RunTimeTicks,
+    );
   }, [
     process?.maxBitrate?.value,
+    process?.mediaSource?.Bitrate,
     process?.item?.RunTimeTicks,
     process?.estimatedTotalSizeBytes,
   ]);
@@ -173,7 +171,9 @@ export const DownloadCard = ({ process, ...props }: DownloadCardProps) => {
 
             {isTranscoding && (
               <View className='bg-purple-600/20 px-2 py-0.5 rounded-md mt-1 self-start'>
-                <Text className='text-xs text-purple-400'>Transcoding</Text>
+                <Text className='text-xs text-purple-400'>
+                  {t("home.downloads.transcoding")}
+                </Text>
               </View>
             )}
 

@@ -1,27 +1,23 @@
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
-import type {
-  BaseItemDto,
-  MediaSourceInfo,
-} from "@jellyfin/sdk/lib/generated-client";
+import type { BaseItemDto } from "@jellyfin/sdk/lib/generated-client";
 import { type FC, useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Platform, TouchableOpacity, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import useRouter from "@/hooks/useAppRouter";
+import { useControlsSafeAreaInsets } from "@/hooks/useControlsSafeAreaInsets";
 import { useHaptic } from "@/hooks/useHaptic";
 import { useOrientation } from "@/hooks/useOrientation";
 import { OrientationLock } from "@/packages/expo-screen-orientation";
-import { useSettings } from "@/utils/atoms/settings";
 import { HEADER_LAYOUT, ICON_SIZES } from "./constants";
 import DropdownView from "./dropdown/DropdownView";
 import { PlaybackSpeedScope } from "./utils/playback-speed-settings";
+import { shouldShowPlayerMenu } from "./utils/shouldShowPlayerMenu";
 import { type AspectRatio } from "./VideoScalingModeSelector";
 import { ZoomToggle } from "./ZoomToggle";
 
 interface HeaderControlsProps {
   item: BaseItemDto;
   showControls: boolean;
-  offline: boolean;
-  mediaSource?: MediaSourceInfo | null;
   startPictureInPicture?: () => Promise<void>;
   switchOnEpisodeMode: () => void;
   goToPreviousItem: () => void;
@@ -34,16 +30,17 @@ interface HeaderControlsProps {
   // Playback speed props
   playbackSpeed?: number;
   setPlaybackSpeed?: (speed: number, scope: PlaybackSpeedScope) => void;
+  subtitleDelay?: number;
+  onSubtitleDelayChange?: (seconds: number) => void;
   // Technical info props
   showTechnicalInfo?: boolean;
   onToggleTechnicalInfo?: () => void;
+  onOpenSubtitleScale?: () => void;
 }
 
 export const HeaderControls: FC<HeaderControlsProps> = ({
   item,
   showControls,
-  offline,
-  mediaSource,
   startPictureInPicture,
   switchOnEpisodeMode,
   goToPreviousItem,
@@ -55,12 +52,15 @@ export const HeaderControls: FC<HeaderControlsProps> = ({
   onZoomToggle,
   playbackSpeed = 1.0,
   setPlaybackSpeed,
+  subtitleDelay = 0,
+  onSubtitleDelayChange,
   showTechnicalInfo = false,
   onToggleTechnicalInfo,
+  onOpenSubtitleScale,
 }) => {
-  const { settings } = useSettings();
+  const { t } = useTranslation();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useControlsSafeAreaInsets();
   const lightHapticFeedback = useHaptic("light");
   const { orientation, lockOrientation } = useOrientation();
   const [isTogglingOrientation, setIsTogglingOrientation] = useState(false);
@@ -99,10 +99,9 @@ export const HeaderControls: FC<HeaderControlsProps> = ({
       style={[
         {
           position: "absolute",
-          top: (settings?.safeAreaInControlsEnabled ?? true) ? insets.top : 0,
-          left: (settings?.safeAreaInControlsEnabled ?? true) ? insets.left : 0,
-          right:
-            (settings?.safeAreaInControlsEnabled ?? true) ? insets.right : 0,
+          top: insets.top,
+          left: insets.left,
+          right: insets.right,
           padding: HEADER_LAYOUT.CONTAINER_PADDING,
         },
       ]}
@@ -110,13 +109,16 @@ export const HeaderControls: FC<HeaderControlsProps> = ({
       className='flex flex-row justify-between'
     >
       <View className='mr-auto' pointerEvents='box-none'>
-        {!Platform.isTV && (!offline || !mediaSource?.TranscodingUrl) && (
+        {shouldShowPlayerMenu({ isTV: Platform.isTV }) && (
           <View pointerEvents='auto'>
             <DropdownView
               playbackSpeed={playbackSpeed}
               setPlaybackSpeed={setPlaybackSpeed}
+              subtitleDelay={subtitleDelay}
+              onSubtitleDelayChange={onSubtitleDelayChange}
               showTechnicalInfo={showTechnicalInfo}
               onToggleTechnicalInfo={onToggleTechnicalInfo}
+              onOpenSubtitleScale={onOpenSubtitleScale}
             />
           </View>
         )}
@@ -130,8 +132,8 @@ export const HeaderControls: FC<HeaderControlsProps> = ({
             onPress={toggleOrientation}
             disabled={isTogglingOrientation}
             className='aspect-square flex flex-col rounded-xl items-center justify-center p-2'
-            accessibilityLabel='Toggle screen orientation'
-            accessibilityHint='Toggles the screen orientation between portrait and landscape'
+            accessibilityLabel={t("accessibility.toggle_orientation")}
+            accessibilityHint={t("accessibility.toggle_orientation_hint")}
           >
             <MaterialIcons
               name='screen-rotation'

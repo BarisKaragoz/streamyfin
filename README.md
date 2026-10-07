@@ -8,9 +8,7 @@ This is a forked version of the original Streamyfin where I implement my own per
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/aJvAYeycyY">
-    <img alt="Streamyfin Discord" src="https://img.shields.io/badge/Discord-Streamyfin-blue?style=flat-square&logo=discord">
-  </a>
+  <a href="https://discord.gg/aJvAYeycyY"><img alt="Streamyfin Discord" src="https://img.shields.io/badge/Discord-Streamyfin-blue?style=flat-square&logo=discord"></a><a href="https://www.reddit.com/r/streamyfin/"><img alt="Streamyfin Reddit" src="https://img.shields.io/badge/Reddit-r--streamyfin-FF4500?style=flat-square&logo=reddit"></a>
 </p>
 
 **Streamyfin is a user-friendly Jellyfin video streaming client built with Expo. Designed as an alternative to other Jellyfin clients, it aims to offer a smooth and reliable streaming experience. We hope you'll find it a valuable addition to your media streaming toolbox.**
@@ -18,13 +16,13 @@ This is a forked version of the original Streamyfin where I implement my own per
 ---
 
 <p align="center">
-  <img src="./assets/images/screenshots/screenshot1.png" width="20%">
+  <img src="./assets/images/screenshots/screenshot1.png" width="20%" alt="Movie page for The Lord of the Rings: The Fellowship of the Ring, with its play button and media details">
   &nbsp;
-  <img src="./assets/images/screenshots/screenshot3.png" width="20%">
+  <img src="./assets/images/screenshots/screenshot3.png" width="20%" alt="Movie page for Wonka with the bitrate menu open">
   &nbsp;
-  <img src="./assets/images/screenshots/screenshot2.png" width="20%">
+  <img src="./assets/images/screenshots/screenshot2.png" width="20%" alt="Downloads screen with a movie downloading">
   &nbsp;
-  <img src="./assets/images/jellyseerr.PNG" width="21%">
+  <img src="./assets/images/seerr.png" width="21%" alt="Seerr page for Family Guy, with the request button and a request button on each season">
 </p>
 
 
@@ -37,6 +35,7 @@ This is a forked version of the original Streamyfin where I implement my own per
 - 🤖 **Seerr (formerly Jellyseerr) integration**: Request media directly in the app
 - 👁️ **Sessions view:** View all active sessions currently streaming on your server
 - 📡 **Chromecast**: Cast your media to any Chromecast-enabled device
+- 🔐 **Custom auth headers**: Reach servers behind an access gateway such as Cloudflare Zero Trust or Pangolin ([docs](./docs/custom-headers.md))
 
 ## 🧪 Experimental Features
 
@@ -75,7 +74,7 @@ Thanks to [@Alexk2309](https://github.com/Alexk2309) for the hard work building 
 
 ## 🛣️ Roadmap
 
-Check out our [Roadmap](https://github.com/users/fredrikburmester/projects/5) To see what we're working on next, we are always open to feedback and suggestions. Please let us know if you have any ideas or feature requests.
+Check out our [Roadmap](https://github.com/orgs/streamyfin/projects/3/views/1) to see what we're working on next, we are always open to feedback and suggestions. Please let us know if you have any ideas or feature requests.
 
 ## 📥 Download Streamyfin
 
@@ -116,17 +115,22 @@ You can contribute translations directly on our [Crowdin project page](https://c
 ### 👨‍💻 Development Info
 
 1. Use node `>20`
-2. Install dependencies `bun i && bun run submodule-reload`
+2. Install dependencies `bun i`
 3. Make sure you have xcode and/or android studio installed. (follow the guides for expo: https://docs.expo.dev/workflow/android-studio-emulator/)
-   - If iOS builds fail with `missing Metal Toolchain` (KSPlayer shaders), run `npm run ios:install-metal-toolchain` once
+   - If iOS builds fail with `missing Metal Toolchain` (KSPlayer shaders), run `bun run ios:install-metal-toolchain` once
 4. Install BiomeJS extension in VSCode/Your IDE (https://biomejs.dev/)
-4. run `npm run prebuild`
-5. Create an expo dev build by running `npm run ios` or `npm run android`. This will open a simulator on your computer and run the app
+5. Run `bun run prebuild`
+6. Create an expo dev build by running `bun run ios` or `bun run android`. This will open a simulator on your computer and run the app
 
-For the TV version suffix the npm commands with `:tv`.
+The project uses bun exclusively: `npm`, `yarn` and `npx` are not supported.
 
-`npm run prebuild:tv`  
-`npm run ios:tv or npm run android:tv`
+For the TV version suffix the commands with `:tv`.
+
+`bun run prebuild:tv`  
+`bun run ios:tv`  
+`bun run android:tv`
+
+Before opening a pull request, read [CONTRIBUTING.md](./CONTRIBUTING.md) and run `bun run test`.
 
 TV platform integration notes:
 
@@ -255,7 +259,7 @@ A special mention to the following people and projects for their contributions:
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=streamyfin/streamyfin&type=Date)](https://star-history.com/#streamyfin/streamyfin&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=streamyfin/streamyfin&type=Date)](https://star-history.dera.page/#streamyfin/streamyfin&Date)
 
 ## 📄 License
 

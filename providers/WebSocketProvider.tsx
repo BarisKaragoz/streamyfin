@@ -1,4 +1,5 @@
 import { getSessionApi } from "@jellyfin/sdk/lib/utils/api";
+import { isAxiosError } from "axios";
 import { useAtomValue } from "jotai";
 import {
   createContext,
@@ -11,10 +12,18 @@ import {
   useState,
 } from "react";
 import { AppState, type AppStateStatus } from "react-native";
-import useRouter from "@/hooks/useAppRouter";
 import { useNetworkAwareQueryClient } from "@/hooks/useNetworkAwareQueryClient";
-import { apiAtom, getOrSetDeviceId } from "@/providers/JellyfinProvider";
+import { apiAtom } from "@/providers/JellyfinProvider";
 import { useNetworkStatus } from "@/providers/NetworkStatusProvider";
+import { getJellyfinHeaders, hasHeaders } from "@/utils/customHeaders";
+import { getOrSetDeviceId } from "@/utils/device";
+import { describeHttpResponse } from "@/utils/errors";
+import { getWebSocketUrl } from "@/utils/jellyfin/getWebSocketUrl";
+import {
+  createSocketFailureRecorder,
+  reportSocketGiveUp,
+} from "@/utils/jellyfin/socketFailure";
+import { logAndCaptureError, writeErrorLog } from "@/utils/log";
 
 // Query keys that depend on the set of library items and should be refreshed
 // when the server reports that the library changed (items added/removed/updated).
@@ -28,6 +37,20 @@ const LIBRARY_CHANGE_QUERY_KEYS = [
   ["episodes"],
 ] as const;
 
+// Query keys that depend on per-user playback state (resume position, played
+// status, favorites) and should be refreshed when the server reports a
+// `UserDataChanged`. Scoped to the progression-based sections so finishing an
+// episode does not pointlessly refetch "recently added" or suggestions.
+const USER_DATA_CHANGE_QUERY_KEYS = [
+  ["home", "continueAndNextUp"],
+  ["home", "resumeItems"],
+  ["home", "nextUp-all"],
+  ["home", "heroItems"],
+  ["resumeItems"],
+  ["nextUp-all"],
+  ["nextUp"],
+] as const;
+
 interface WebSocketMessage {
   MessageType: string;
   Data: any;
@@ -38,23 +61,56 @@ interface WebSocketProviderProps {
   children: ReactNode;
 }
 
+/**
+ * Handler invoked for every message of a given `MessageType`. Receives the
+ * message `Data` payload and the full message.
+ */
+type WebSocketMessageHandler = (data: any, message: WebSocketMessage) => void;
+
 interface WebSocketContextType {
   ws: WebSocket | null;
   isConnected: boolean;
+  /**
+   * @deprecated Prefer `subscribe`. `lastMessage` only keeps the most recent
+   * message, so bursts arriving in the same tick are coalesced and lost. Kept
+   * for `useWebsockets` (GeneralCommand handling) until it is migrated.
+   */
   lastMessage: WebSocketMessage | null;
+  /**
+   * Subscribe to a given message type. The handler is called synchronously for
+   * every matching message (no coalescing, unlike `lastMessage`). Returns an
+   * unsubscribe function to call on cleanup.
+   */
+  subscribe: (
+    messageType: string,
+    handler: WebSocketMessageHandler,
+  ) => () => void;
   sendMessage: (message: any) => void;
   clearLastMessage: () => void;
 }
 
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
 
+/** React Native's WebSocket constructor, which also takes request headers. */
+type RNWebSocketConstructor = new (
+  url: string,
+  protocols: string[] | string | undefined,
+  options: { headers: Record<string, string> },
+) => WebSocket;
+
 export const WebSocketProvider = ({ children }: WebSocketProviderProps) => {
   const api = useAtomValue(apiAtom);
-  const { isConnected: isNetworkConnected } = useNetworkStatus();
+  const { isConnected: isNetworkConnected, serverConnected } =
+    useNetworkStatus();
+  // The give-up report fires at most once per session: after the first
+  // exhaustion the attempt counter stays maxed, so every later foreground/
+  // network flip would re-trigger it.
+  const reportedSocketGiveUpRef = useRef(false);
+  const serverConnectedRef = useRef(serverConnected);
+  serverConnectedRef.current = serverConnected;
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
-  const router = useRouter();
   const queryClient = useNetworkAwareQueryClient();
   const deviceId = useMemo(() => {
     return getOrSetDeviceId();
@@ -63,20 +119,97 @@ export const WebSocketProvider = ({ children }: WebSocketProviderProps) => {
   const libraryChangeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const userDataChangeDebounceRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  // Handle for the onerror backoff timer. Tracked so a reconnect triggered by
+  // another path (foreground, network reconnect, effect re-run) can cancel a
+  // pending one — an untracked timer would later open a second socket.
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  // Pub/sub registry: messageType -> set of handlers. Stored in a ref so
+  // subscribing/dispatching never triggers a re-render.
+  const listenersRef = useRef<Map<string, Set<WebSocketMessageHandler>>>(
+    new Map(),
+  );
+
+  const subscribe = useCallback(
+    (messageType: string, handler: WebSocketMessageHandler) => {
+      const listeners = listenersRef.current;
+      let handlers = listeners.get(messageType);
+      if (!handlers) {
+        handlers = new Set();
+        listeners.set(messageType, handlers);
+      }
+      handlers.add(handler);
+      return () => {
+        handlers?.delete(handler);
+        // Only drop the map entry if it still points at THIS set. After an
+        // unsubscribe + re-subscribe for the same type, a stale second call to
+        // this cleanup would otherwise delete the new subscribers' set and
+        // silently stop delivering their messages.
+        if (
+          handlers &&
+          handlers.size === 0 &&
+          listeners.get(messageType) === handlers
+        ) {
+          listeners.delete(messageType);
+        }
+      };
+    },
+    [],
+  );
+
+  const dispatchMessage = useCallback((message: WebSocketMessage) => {
+    const handlers = listenersRef.current.get(message.MessageType);
+    if (!handlers || handlers.size === 0) return;
+    // Copy to tolerate handlers that unsubscribe during dispatch.
+    for (const handler of [...handlers]) {
+      // Isolate each handler so one throwing subscriber can't abort the rest
+      // (and isn't misreported as a parse failure by the outer onmessage catch).
+      try {
+        handler(message.Data, message);
+      } catch (error) {
+        logAndCaptureError("WebSocket message handler threw", error, {
+          messageType: message.MessageType,
+        });
+      }
+    }
+  }, []);
 
   const connectWebSocket = useCallback(() => {
+    // Cancel any reconnect queued by a previous onerror before opening a new
+    // socket, so we never end up with two live sockets — each would double the
+    // message fan-out and double-invalidate queries.
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
     if (!deviceId || !api?.accessToken || !isNetworkConnected) {
       return;
     }
 
-    const protocol = api.basePath.includes("https") ? "wss" : "ws";
-    const url = `${protocol}://${api.basePath
-      .replace("https://", "")
-      .replace("http://", "")}/socket?api_key=${
-      api.accessToken
-    }&deviceId=${deviceId}`;
+    const url = getWebSocketUrl(api.basePath, api.accessToken, deviceId);
+    // Not an http(s) base path: go without live updates rather than throw out
+    // of this effect, which would unmount every provider below the root. The
+    // address stays out of the message, which becomes a Sentry breadcrumb.
+    if (!url) {
+      writeErrorLog("WebSocket: server address is not an http(s) URL");
+      return;
+    }
 
-    const newWebSocket = new WebSocket(url);
+    // React Native's WebSocket takes request headers as a third argument (the
+    // DOM typings don't know about it), so a server behind an access gateway
+    // can complete the upgrade handshake.
+    const customHeaders = getJellyfinHeaders(api.basePath);
+    const newWebSocket = hasHeaders(customHeaders)
+      ? new (WebSocket as unknown as RNWebSocketConstructor)(url, undefined, {
+          headers: customHeaders,
+        })
+      : new WebSocket(url);
     let keepAliveInterval: ReturnType<typeof setInterval> | null = null;
 
     const maxReconnectAttempts = 5;
@@ -85,6 +218,10 @@ export const WebSocketProvider = ({ children }: WebSocketProviderProps) => {
     newWebSocket.onopen = () => {
       setIsConnected(true);
       reconnectAttemptsRef.current = 0;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       keepAliveInterval = setInterval(() => {
         if (newWebSocket.readyState === WebSocket.OPEN) {
           newWebSocket.send(JSON.stringify({ MessageType: "KeepAlive" }));
@@ -92,30 +229,56 @@ export const WebSocketProvider = ({ children }: WebSocketProviderProps) => {
       }, 30000);
     };
 
-    newWebSocket.onerror = () => {
+    const failure = createSocketFailureRecorder();
+
+    newWebSocket.onerror = (event) => {
       // Don't log errors - this is expected when offline or server unreachable
       setIsConnected(false);
+      failure.error(event);
 
+      // Replace any still-pending reconnect so only one is ever queued; the
+      // previously untracked handle could leak and open a second socket.
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
       if (reconnectAttemptsRef.current < maxReconnectAttempts) {
         reconnectAttemptsRef.current++;
-        setTimeout(() => {
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null;
           connectWebSocket();
         }, reconnectDelay);
+      } else if (
+        serverConnectedRef.current === true &&
+        !reportedSocketGiveUpRef.current
+      ) {
+        // All retries burned while the SERVER is reachable (a real probe,
+        // not just device connectivity): the server itself is rejecting the
+        // socket, which silently kills remote control and live updates
+        // until the next app foreground. Reported on the next tick: the
+        // close event that follows this one is what brings the reason, and
+        // the reason is what keeps every proxy that drops the upgrade from
+        // piling onto the real bugs.
+        reportedSocketGiveUpRef.current = true;
+        setTimeout(() => reportSocketGiveUp(failure.describe()), 0);
       }
     };
 
-    newWebSocket.onclose = () => {
+    newWebSocket.onclose = (event) => {
       if (keepAliveInterval) {
         clearInterval(keepAliveInterval);
       }
       setIsConnected(false);
+      failure.close(event);
     };
     newWebSocket.onmessage = (e) => {
       try {
         const message = JSON.parse(e.data);
-        setLastMessage(message); // Store the last message in context
+        // Legacy single-slot state, still consumed by useWebsockets.
+        setLastMessage(message);
+        // Pub/sub: deliver to every subscriber without coalescing.
+        dispatchMessage(message);
       } catch (error) {
-        console.error("Error parsing WebSocket message:", error);
+        logAndCaptureError("Error parsing WebSocket message", error);
       }
     };
     setWs(newWebSocket);
@@ -124,9 +287,13 @@ export const WebSocketProvider = ({ children }: WebSocketProviderProps) => {
       if (keepAliveInterval) {
         clearInterval(keepAliveInterval);
       }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       newWebSocket.close();
     };
-  }, [api, deviceId, isNetworkConnected]);
+  }, [api, deviceId, isNetworkConnected, dispatchMessage]);
 
   const handleLibraryChanged = useCallback(
     (data: any) => {
@@ -157,48 +324,58 @@ export const WebSocketProvider = ({ children }: WebSocketProviderProps) => {
     [queryClient],
   );
 
-  useEffect(() => {
-    if (!lastMessage) {
-      return;
-    }
-    if (lastMessage.MessageType === "Play") {
-      handlePlayCommand(lastMessage.Data);
-    } else if (lastMessage.MessageType === "LibraryChanged") {
-      handleLibraryChanged(lastMessage.Data);
-    }
-  }, [lastMessage, router, handleLibraryChanged]);
+  const handleUserDataChanged = useCallback(
+    (data: any) => {
+      // Jellyfin sends UserDataChanged when playback position, played status
+      // or favorites change (e.g. finishing an episode). Only the
+      // progression-based home sections care about it.
+      if (!((data?.UserDataList?.length ?? 0) > 0)) {
+        return;
+      }
+
+      // Finishing an item can emit several UserDataChanged messages, so
+      // debounce to invalidate the affected sections only once.
+      if (userDataChangeDebounceRef.current) {
+        clearTimeout(userDataChangeDebounceRef.current);
+      }
+      userDataChangeDebounceRef.current = setTimeout(() => {
+        for (const queryKey of USER_DATA_CHANGE_QUERY_KEYS) {
+          queryClient.invalidateQueries({ queryKey: [...queryKey] });
+        }
+      }, 800);
+    },
+    [queryClient],
+  );
+
+  // Refresh library-dependent queries when the server reports a change.
+  useEffect(
+    () => subscribe("LibraryChanged", handleLibraryChanged),
+    [subscribe, handleLibraryChanged],
+  );
+
+  // Refresh "Continue Watching" / "Next Up" when playback state changes.
+  useEffect(
+    () => subscribe("UserDataChanged", handleUserDataChanged),
+    [subscribe, handleUserDataChanged],
+  );
 
   useEffect(() => {
     return () => {
       if (libraryChangeDebounceRef.current) {
         clearTimeout(libraryChangeDebounceRef.current);
       }
+      if (userDataChangeDebounceRef.current) {
+        clearTimeout(userDataChangeDebounceRef.current);
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
     };
   }, []);
 
-  const handlePlayCommand = useCallback(
-    (data: any) => {
-      if (!data?.ItemIds?.length) {
-        return;
-      }
-
-      const itemId = data.ItemIds[0];
-
-      router.push({
-        pathname: "/(auth)/player/direct-player",
-        params: {
-          itemId: itemId,
-          playCommand: data.PlayCommand || "PlayNow",
-          audioIndex: data.AudioStreamIndex?.toString(),
-          subtitleIndex: data.SubtitleStreamIndex?.toString(),
-          mediaSourceId: data.MediaSourceId || "",
-          bitrateValue: "",
-          offline: "false",
-        },
-      });
-    },
-    [router],
-  );
+  // The server-initiated "Play me this item" command is handled by
+  // NativePlayerProvider (mounted below this provider): it presents the
+  // native player when active, and falls back to the JS player route.
 
   useEffect(() => {
     const cleanup = connectWebSocket();
@@ -217,15 +394,38 @@ export const WebSocketProvider = ({ children }: WebSocketProviderProps) => {
             AppStoreUrl:
               "https://apps.apple.com/us/app/streamyfin/id6593660679",
             IconUrl:
-              "https://raw.githubusercontent.com/retardgerman/streamyfinweb/refs/heads/main/public/assets/images/icon_new_withoutBackground.png",
+              "https://raw.githubusercontent.com/streamyfin/streamyfin/refs/heads/develop/assets/images/streamyfin-client-badge.png",
             PlayableMediaTypes: ["Audio", "Video"],
             SupportedCommands: ["Play"],
             SupportsMediaControl: true,
             SupportsPersistentIdentifier: true,
           },
         });
-      } catch {
-        // Silently fail - expected when offline or server unreachable
+      } catch (error) {
+        // Connectivity failures are filtered centrally; 401 is routine
+        // session expiry (the auth interceptor handles it). What remains is
+        // a server rejection that silently breaks remote control — and the
+        // response's content type, Server header and the kind of body it
+        // came with are what tell Jellyfin's own refusal apart from a proxy
+        // that blocks the POST, or turns it into a GET via an http→https
+        // redirect (405). The body itself is not sent: describeHttpResponse
+        // only quotes a reason it knows to be fixed words, and cuts the two
+        // headers down to the product and the media type they name.
+        if (isAxiosError(error) && error.response?.status === 401) return;
+        if (isAxiosError(error) && error.response?.status === 404) {
+          // Jellyfin's own ExceptionMiddleware answers 404 ("Error processing
+          // request.", text/plain) when this POST races session registration
+          // at start/resume; the session appears moments later and the effect
+          // re-posts on the next api/network change. Timing, not an app bug —
+          // local log only.
+          writeErrorLog(
+            "Posting session capabilities failed",
+            describeHttpResponse(error),
+          );
+          return;
+        }
+        // logAndCaptureError describes the response on the event itself.
+        logAndCaptureError("Posting session capabilities failed", error);
       }
     };
 
@@ -267,7 +467,14 @@ export const WebSocketProvider = ({ children }: WebSocketProviderProps) => {
   }, []);
   return (
     <WebSocketContext.Provider
-      value={{ ws, isConnected, lastMessage, sendMessage, clearLastMessage }}
+      value={{
+        ws,
+        isConnected,
+        lastMessage,
+        subscribe,
+        sendMessage,
+        clearLastMessage,
+      }}
     >
       {children}
     </WebSocketContext.Provider>

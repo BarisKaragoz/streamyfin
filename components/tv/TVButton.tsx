@@ -1,12 +1,13 @@
 import React from "react";
 import { Animated, Pressable, View, type ViewStyle } from "react-native";
+import { SeerrIssueColors } from "@/constants/Colors";
 import { scaleSize } from "@/utils/scaleSize";
 import { useTVFocusAnimation } from "./hooks/useTVFocusAnimation";
 
 export interface TVButtonProps {
   onPress: () => void;
   children: React.ReactNode;
-  variant?: "primary" | "secondary" | "glass";
+  variant?: "primary" | "secondary" | "glass" | "warning";
   hasTVPreferredFocus?: boolean;
   disabled?: boolean;
   style?: ViewStyle;
@@ -18,35 +19,51 @@ export interface TVButtonProps {
 }
 
 const getButtonStyles = (
-  variant: "primary" | "secondary" | "glass",
+  variant: "primary" | "secondary" | "glass" | "warning",
   focused: boolean,
 ) => {
   switch (variant) {
+    case "warning":
+      // Seerr's issue yellow, as the phone's report button.
+      return {
+        backgroundColor: focused
+          ? SeerrIssueColors.focused
+          : SeerrIssueColors.background,
+        borderWidth: scaleSize(2),
+        borderColor: focused
+          ? "rgba(255, 255, 255, 0.9)"
+          : SeerrIssueColors.border,
+      };
     case "glass":
       return {
+        // Constant border width, color swaps only — toggling width would
+        // relayout the row on every focus move.
         backgroundColor: focused
           ? "rgba(255, 255, 255, 0.25)"
           : "rgba(255, 255, 255, 0.1)",
-        shadowColor: "#fff",
-        borderWidth: 1,
+        borderWidth: scaleSize(2),
         borderColor: focused
-          ? "rgba(255, 255, 255, 0.4)"
-          : "rgba(255, 255, 255, 0.15)",
+          ? "rgba(255, 255, 255, 0.9)"
+          : "rgba(255, 255, 255, 0)",
       };
     case "secondary":
       return {
         backgroundColor: focused
           ? "rgba(255, 255, 255, 0.3)"
           : "rgba(255, 255, 255, 0.15)",
-        shadowColor: "#fff",
-        borderWidth: 2,
-        borderColor: focused ? "#fff" : "rgba(255, 255, 255, 0.2)",
+        borderWidth: scaleSize(2),
+        borderColor: focused
+          ? "rgba(255, 255, 255, 0.9)"
+          : "rgba(255, 255, 255, 0)",
       };
     default:
+      // The fill itself must signal focus: a white-on-white border ring is
+      // invisible on this solid fill, and Android TV devices don't reliably
+      // render the iOS glow, so dim the resting fill and go fully opaque +
+      // glow when focused.
       return {
-        backgroundColor: focused ? "#ffffff" : "rgba(255, 255, 255, 0.9)",
-        shadowColor: "#fff",
-        borderWidth: 1,
+        backgroundColor: focused ? "#ffffff" : "rgba(255, 255, 255, 0.7)",
+        borderWidth: 0,
         borderColor: "transparent",
       };
   }
@@ -82,18 +99,7 @@ export const TVButton: React.FC<TVButtonProps> = ({
       nextFocusDown={nextFocusDown}
       nextFocusUp={nextFocusUp}
     >
-      <Animated.View
-        style={[
-          animatedStyle,
-          {
-            shadowColor: buttonStyles.shadowColor,
-            shadowOffset: { width: 0, height: 0 },
-            shadowOpacity: focused ? 0.4 : 0,
-            shadowRadius: focused ? 15 : 0,
-          },
-          style,
-        ]}
-      >
+      <Animated.View style={[animatedStyle, style]}>
         <View
           style={{
             backgroundColor: buttonStyles.backgroundColor,
@@ -106,6 +112,15 @@ export const TVButton: React.FC<TVButtonProps> = ({
             alignItems: "center",
             justifyContent: "center",
             minWidth: square ? undefined : scaleSize(180),
+            // tvOS-only centered glow. Do NOT add elevation for Android: it
+            // renders as an offset drop shadow *outside* the button (a
+            // detached glow blob), and shadowOpacity/shadowRadius are iOS
+            // props. Android TV's focus signal is the fill/border swap plus
+            // the scale animation, matching leanback conventions.
+            shadowColor: "#fff",
+            shadowOffset: { width: 0, height: 0 },
+            shadowOpacity: focused ? 0.5 : 0,
+            shadowRadius: focused ? scaleSize(15) : 0,
           }}
         >
           {children}

@@ -1,5 +1,7 @@
+import { ItemFilter } from "@jellyfin/sdk/lib/generated-client/models";
 import { atom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
+import { useMemo } from "react";
 import { storage } from "../mmkv";
 import { useSettings } from "./settings";
 
@@ -20,14 +22,22 @@ export enum SortByOption {
   Studio = "Studio",
   Random = "Random",
 }
-export enum FilterByOption {
-  IsFavoriteOrLiked = "IsFavoriteOrLiked",
-  IsUnplayed = "IsUnplayed",
-  IsPlayed = "IsPlayed",
-  Likes = "Likes",
-  IsFavorite = "IsFavorite",
-  IsResumable = "IsResumable",
-}
+// These go to the server as they are, so each one is the SDK's own ItemFilter
+// constant: a name the server does not have no longer compiles.
+export const FilterByOption = {
+  IsFavoriteOrLikes: ItemFilter.IsFavoriteOrLikes,
+  IsUnplayed: ItemFilter.IsUnplayed,
+  IsPlayed: ItemFilter.IsPlayed,
+  Likes: ItemFilter.Likes,
+  IsFavorite: ItemFilter.IsFavorite,
+  IsResumable: ItemFilter.IsResumable,
+} as const satisfies Record<string, ItemFilter>;
+export type FilterByOption =
+  (typeof FilterByOption)[keyof typeof FilterByOption];
+
+// How the favourite-or-liked filter was spelt until the server's name replaced
+// it. Per-library preferences saved before that still hold it.
+const LEGACY_IS_FAVORITE_OR_LIKES = "IsFavoriteOrLiked";
 
 export enum SortOrderOption {
   Ascending = "Ascending",
@@ -59,32 +69,36 @@ export const sortOptions: {
 
 export const useFilterOptions = () => {
   const { settings } = useSettings();
-  // We want to only show the watchlist option if someone has ticked that setting.
-  const filterOptions = settings?.useKefinTweaks
-    ? [
-        {
-          key: FilterByOption.IsFavoriteOrLiked,
-          value: "Is Favorite Or Liked",
-        },
-        { key: FilterByOption.IsUnplayed, value: "Is Unplayed" },
-        { key: FilterByOption.IsPlayed, value: "Is Played" },
-        { key: FilterByOption.IsFavorite, value: "Is Favorite" },
-        { key: FilterByOption.IsResumable, value: "Is Resumable" },
-        { key: FilterByOption.Likes, value: "Watchlist" },
-      ]
-    : [
-        {
-          key: FilterByOption.IsFavoriteOrLiked,
-          value: "Is Favorite Or Liked",
-        },
-        { key: FilterByOption.IsUnplayed, value: "Is Unplayed" },
-        { key: FilterByOption.IsPlayed, value: "Is Played" },
-        { key: FilterByOption.IsFavorite, value: "Is Favorite" },
-        { key: FilterByOption.IsResumable, value: "Is Resumable" },
-      ];
-  console.log("filterOptions");
-  console.log(filterOptions);
-  return filterOptions;
+  // Memoized so the array identity stays stable across renders: a fresh array
+  // every render invalidates the library screen's ListHeaderComponent callback,
+  // which rebuilds the whole filter bar on any unrelated re-render.
+  // We only show the watchlist option if someone has ticked that setting.
+  return useMemo(
+    (): { key: FilterByOption; value: string }[] =>
+      settings?.useKefinTweaks
+        ? [
+            {
+              key: FilterByOption.IsFavoriteOrLikes,
+              value: "Is Favorite Or Liked",
+            },
+            { key: FilterByOption.IsUnplayed, value: "Is Unplayed" },
+            { key: FilterByOption.IsPlayed, value: "Is Played" },
+            { key: FilterByOption.IsFavorite, value: "Is Favorite" },
+            { key: FilterByOption.IsResumable, value: "Is Resumable" },
+            { key: FilterByOption.Likes, value: "Watchlist" },
+          ]
+        : [
+            {
+              key: FilterByOption.IsFavoriteOrLikes,
+              value: "Is Favorite Or Liked",
+            },
+            { key: FilterByOption.IsUnplayed, value: "Is Unplayed" },
+            { key: FilterByOption.IsPlayed, value: "Is Played" },
+            { key: FilterByOption.IsFavorite, value: "Is Favorite" },
+            { key: FilterByOption.IsResumable, value: "Is Resumable" },
+          ],
+    [settings?.useKefinTweaks],
+  );
 };
 
 export const sortOrderOptions: {
@@ -116,59 +130,90 @@ export interface FilterPreference {
   [libraryId: string]: FilterByOption;
 }
 
+// Genres, years and tags are multi-select, so each library remembers a list.
+export interface MultiFilterPreference {
+  [libraryId: string]: string[];
+}
+
 const defaultSortPreference: SortPreference = {};
 const defaultSortOrderPreference: SortOrderPreference = {};
 const defaultFilterPreference: FilterPreference = {};
+const defaultMultiFilterPreference: MultiFilterPreference = {};
+
+// Every preference map below persists the same way: one JSON blob per key.
+const mmkvStorage = <T>() => ({
+  getItem: (key: string, initialValue: T): T => {
+    const value = storage.getString(key);
+    if (!value) return initialValue;
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return initialValue;
+    }
+  },
+  setItem: (key: string, value: T) => {
+    storage.set(key, JSON.stringify(value));
+  },
+  removeItem: (key: string) => {
+    storage.remove(key);
+  },
+});
 
 export const sortByPreferenceAtom = atomWithStorage<SortPreference>(
   "sortByPreference",
   defaultSortPreference,
-  {
-    getItem: (key) => {
-      const value = storage.getString(key);
-      return value ? JSON.parse(value) : null;
-    },
-    setItem: (key, value) => {
-      storage.set(key, JSON.stringify(value));
-    },
-    removeItem: (key) => {
-      storage.remove(key);
-    },
-  },
+  mmkvStorage<SortPreference>(),
 );
+
+// Renames the legacy spelling as the map is read, so every reader gets a
+// filter the server accepts and the next save writes the fixed name back.
+const filterPreferenceStorage = () => {
+  const base = mmkvStorage<FilterPreference>();
+  return {
+    ...base,
+    getItem: (key: string, initialValue: FilterPreference) => {
+      const stored: Record<string, string> = base.getItem(key, initialValue);
+      const migrated: FilterPreference = {};
+      for (const [libraryId, filter] of Object.entries(stored ?? {})) {
+        migrated[libraryId] = (
+          filter === LEGACY_IS_FAVORITE_OR_LIKES
+            ? FilterByOption.IsFavoriteOrLikes
+            : filter
+        ) as FilterByOption;
+      }
+      return migrated;
+    },
+  };
+};
 
 export const FilterByPreferenceAtom = atomWithStorage<FilterPreference>(
   "filterByPreference",
   defaultFilterPreference,
-  {
-    getItem: (key) => {
-      const value = storage.getString(key);
-      return value ? JSON.parse(value) : null;
-    },
-    setItem: (key, value) => {
-      storage.set(key, JSON.stringify(value));
-    },
-    removeItem: (key) => {
-      storage.remove(key);
-    },
-  },
+  filterPreferenceStorage(),
 );
 
 export const sortOrderPreferenceAtom = atomWithStorage<SortOrderPreference>(
   "sortOrderPreference",
   defaultSortOrderPreference,
-  {
-    getItem: (key) => {
-      const value = storage.getString(key);
-      return value ? JSON.parse(value) : null;
-    },
-    setItem: (key, value) => {
-      storage.set(key, JSON.stringify(value));
-    },
-    removeItem: (key) => {
-      storage.remove(key);
-    },
-  },
+  mmkvStorage<SortOrderPreference>(),
+);
+
+export const genrePreferenceAtom = atomWithStorage<MultiFilterPreference>(
+  "genrePreference",
+  defaultMultiFilterPreference,
+  mmkvStorage<MultiFilterPreference>(),
+);
+
+export const yearPreferenceAtom = atomWithStorage<MultiFilterPreference>(
+  "yearPreference",
+  defaultMultiFilterPreference,
+  mmkvStorage<MultiFilterPreference>(),
+);
+
+export const tagPreferenceAtom = atomWithStorage<MultiFilterPreference>(
+  "tagPreference",
+  defaultMultiFilterPreference,
+  mmkvStorage<MultiFilterPreference>(),
 );
 
 export const getSortByPreference = (
@@ -191,3 +236,8 @@ export const getFilterByPreference = (
 ) => {
   return preferences?.[libraryId] || null;
 };
+
+export const getMultiFilterPreference = (
+  libraryId: string,
+  preferences: MultiFilterPreference,
+) => preferences?.[libraryId] ?? [];

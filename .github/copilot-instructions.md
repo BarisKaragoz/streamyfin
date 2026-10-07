@@ -3,7 +3,7 @@
 ## Project Overview
 
 Streamyfin is a cross-platform Jellyfin video streaming client built with Expo (React Native).  
-It supports mobile (iOS/Android) and TV platforms, integrates with Jellyfin and Jellyseerr APIs,
+It supports mobile (iOS/Android) and TV platforms, integrates with Jellyfin and Seerr APIs,
 and provides seamless media streaming with offline capabilities and Chromecast support.
 
 ## Main Technologies
@@ -42,7 +42,7 @@ and provides seamless media streaming with offline capabilities and Chromecast s
 
 ## Coding Standards
 
-- Use TypeScript for ALL files (no .js files)
+- Use TypeScript for ALL files (no .js files). Tooling-required exceptions: `babel.config.js`, `metro.config.js`, `react-native.config.js`, `tailwind.config.js` (their loaders cannot parse TypeScript)
 - Use descriptive English names for variables, functions, and components
 - Prefer functional React components with hooks
 - Use Jotai atoms for global state management

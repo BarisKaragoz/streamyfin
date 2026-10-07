@@ -2,27 +2,26 @@ import type { BaseItemDto } from "@jellyfin/sdk/lib/generated-client/models";
 import { useAtom } from "jotai";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { ScrollView, View } from "react-native";
+import { Platform, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Text } from "@/components/common/Text";
-import { TVDiscover } from "@/components/jellyseerr/discover/TVDiscover";
+import { TVDiscover } from "@/components/seerr/discover/TVDiscover";
 import { useScaledTVSizes } from "@/constants/TVSizes";
 import { useScaledTVTypography } from "@/constants/TVTypography";
 import { TvSearchView } from "@/modules/tv-search";
 import { apiAtom } from "@/providers/JellyfinProvider";
 import { getPrimaryImageUrl } from "@/utils/jellyfin/image/getPrimaryImageUrl";
-import type DiscoverSlider from "@/utils/jellyseerr/server/entity/DiscoverSlider";
+import { scaleSize } from "@/utils/scaleSize";
 import type {
+  DiscoverSlider,
   MovieResult,
   PersonResult,
   TvResult,
-} from "@/utils/jellyseerr/server/models/Search";
-import { scaleSize } from "@/utils/scaleSize";
-import { TVJellyseerrSearchResults } from "./TVJellyseerrSearchResults";
+} from "@/utils/seerr/types";
 import { TVSearchSection } from "./TVSearchSection";
 import { TVSearchTabBadges } from "./TVSearchTabBadges";
+import { TVSeerrSearchResults } from "./TVSeerrSearchResults";
 
-const HORIZONTAL_PADDING = 60;
 const TOP_PADDING = 100;
 // Height of the native search bar itself. The tvOS grid keyboard presents as
 // its own overlay when the field is focused, so we only reserve the bar height
@@ -117,18 +116,18 @@ interface TVSearchPageProps {
   noResults: boolean;
   onItemPress: (item: BaseItemDto) => void;
   onItemLongPress?: (item: BaseItemDto) => void;
-  // Jellyseerr/Discover props
+  // Seerr/Discover props
   searchType: SearchType;
   setSearchType: (type: SearchType) => void;
   showDiscover: boolean;
-  jellyseerrMovies?: MovieResult[];
-  jellyseerrTv?: TvResult[];
-  jellyseerrPersons?: PersonResult[];
-  jellyseerrLoading?: boolean;
-  jellyseerrNoResults?: boolean;
-  onJellyseerrMoviePress?: (item: MovieResult) => void;
-  onJellyseerrTvPress?: (item: TvResult) => void;
-  onJellyseerrPersonPress?: (item: PersonResult) => void;
+  seerrMovies?: MovieResult[];
+  seerrTv?: TvResult[];
+  seerrPersons?: PersonResult[];
+  seerrLoading?: boolean;
+  seerrNoResults?: boolean;
+  onSeerrMoviePress?: (item: MovieResult) => void;
+  onSeerrTvPress?: (item: TvResult) => void;
+  onSeerrPersonPress?: (item: PersonResult) => void;
   // Discover sliders for empty state
   discoverSliders?: DiscoverSlider[];
 }
@@ -152,17 +151,18 @@ export const TVSearchPage: React.FC<TVSearchPageProps> = ({
   searchType,
   setSearchType,
   showDiscover,
-  jellyseerrMovies = [],
-  jellyseerrTv = [],
-  jellyseerrPersons = [],
-  jellyseerrLoading = false,
-  jellyseerrNoResults = false,
-  onJellyseerrMoviePress,
-  onJellyseerrTvPress,
-  onJellyseerrPersonPress,
+  seerrMovies = [],
+  seerrTv = [],
+  seerrPersons = [],
+  seerrLoading = false,
+  seerrNoResults = false,
+  onSeerrMoviePress,
+  onSeerrTvPress,
+  onSeerrPersonPress,
   discoverSliders,
 }) => {
   const typography = useScaledTVTypography();
+  const sizes = useScaledTVSizes();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const [api] = useAtom(apiAtom);
@@ -220,8 +220,8 @@ export const TVSearchPage: React.FC<TVSearchPageProps> = ({
 
   const isLibraryMode = searchType === "Library";
   const isDiscoverMode = searchType === "Discover";
-  const currentLoading = isLibraryMode ? loading : jellyseerrLoading;
-  const currentNoResults = isLibraryMode ? noResults : jellyseerrNoResults;
+  const currentLoading = isLibraryMode ? loading : seerrLoading;
+  const currentNoResults = isLibraryMode ? noResults : seerrNoResults;
 
   return (
     <View style={{ flex: 1 }}>
@@ -231,26 +231,48 @@ export const TVSearchPage: React.FC<TVSearchPageProps> = ({
           paddingTop: insets.top + TOP_PADDING,
         }}
       >
-        {/* Native tvOS search field (SwiftUI `.searchable`, our `tv-search`
-            module). It renders the native search bar + grid keyboard and
-            forwards typed text into the existing query pipeline via setSearch;
-            our own results grid renders below. */}
-        {/* No horizontal margin here: the native tvOS search bar centers itself
-            and renders a trailing "Hold to Dictate in <Language>" hint. Extra
-            margins squeeze the bar's width and clip that trailing hint, so let
-            the native view span the full width and own its own insets. */}
-        <View
-          style={{
-            marginBottom: 24,
-            height: SEARCH_AREA_HEIGHT,
-          }}
-        >
-          <TvSearchView
-            style={{ width: "100%", height: "100%" }}
-            placeholder={t("search.search")}
-            onChangeText={(e) => setSearch(e.nativeEvent.text)}
-          />
-        </View>
+        {/* Search bar: native tvOS SwiftUI `.searchable` on Apple TV, standard
+            TextInput fallback on Android TV (the native module is Apple-only). */}
+        {Platform.OS === "ios" ? (
+          <View
+            style={{
+              marginBottom: 24,
+              height: SEARCH_AREA_HEIGHT,
+            }}
+          >
+            {/* No horizontal margin here: the native tvOS search bar centers
+                itself and renders a trailing "Hold to Dictate" hint. */}
+            <TvSearchView
+              style={{ width: "100%", height: "100%" }}
+              placeholder={t("search.search")}
+              onChangeText={(e) => setSearch(e.nativeEvent.text)}
+            />
+          </View>
+        ) : (
+          <View
+            style={{
+              marginHorizontal: sizes.padding.horizontal,
+              marginBottom: 24,
+            }}
+          >
+            <TextInput
+              style={{
+                height: 56,
+                width: "100%",
+                backgroundColor: "#262626",
+                borderRadius: 12,
+                paddingHorizontal: 20,
+                fontSize: 28,
+                color: "#fff",
+              }}
+              placeholder={t("search.search")}
+              placeholderTextColor='rgba(255,255,255,0.4)'
+              onChangeText={setSearch}
+              defaultValue=''
+              autoFocus={false}
+            />
+          </View>
+        )}
       </View>
 
       <ScrollView
@@ -263,7 +285,7 @@ export const TVSearchPage: React.FC<TVSearchPageProps> = ({
       >
         {/* Search Type Tab Badges */}
         {showDiscover && (
-          <View style={{ marginHorizontal: HORIZONTAL_PADDING }}>
+          <View style={{ marginHorizontal: sizes.padding.horizontal }}>
             <TVSearchTabBadges
               searchType={searchType}
               setSearchType={setSearchType}
@@ -308,27 +330,25 @@ export const TVSearchPage: React.FC<TVSearchPageProps> = ({
           </View>
         )}
 
-        {/* Jellyseerr/Discover Search Results */}
-        {isDiscoverMode && !jellyseerrLoading && debouncedSearch.length > 0 && (
-          <TVJellyseerrSearchResults
-            movieResults={jellyseerrMovies}
-            tvResults={jellyseerrTv}
-            personResults={jellyseerrPersons}
-            loading={jellyseerrLoading}
-            noResults={jellyseerrNoResults}
+        {/* Seerr/Discover Search Results */}
+        {isDiscoverMode && !seerrLoading && debouncedSearch.length > 0 && (
+          <TVSeerrSearchResults
+            movieResults={seerrMovies}
+            tvResults={seerrTv}
+            personResults={seerrPersons}
+            loading={seerrLoading}
+            noResults={seerrNoResults}
             searchQuery={debouncedSearch}
-            onMoviePress={onJellyseerrMoviePress || (() => {})}
-            onTvPress={onJellyseerrTvPress || (() => {})}
-            onPersonPress={onJellyseerrPersonPress || (() => {})}
+            onMoviePress={onSeerrMoviePress || (() => {})}
+            onTvPress={onSeerrTvPress || (() => {})}
+            onPersonPress={onSeerrPersonPress || (() => {})}
           />
         )}
 
         {/* Discover Content (when no search query in Discover mode) */}
-        {isDiscoverMode &&
-          !jellyseerrLoading &&
-          debouncedSearch.length === 0 && (
-            <TVDiscover sliders={discoverSliders} />
-          )}
+        {isDiscoverMode && !seerrLoading && debouncedSearch.length === 0 && (
+          <TVDiscover sliders={discoverSliders} />
+        )}
 
         {/* No Results State */}
         {!currentLoading && currentNoResults && debouncedSearch.length > 0 && (

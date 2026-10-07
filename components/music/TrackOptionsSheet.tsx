@@ -6,7 +6,6 @@ import {
   BottomSheetView,
 } from "@gorhom/bottom-sheet";
 import type { BaseItemDto } from "@jellyfin/sdk/lib/generated-client/models";
-import { Image } from "expo-image";
 import { useAtom } from "jotai";
 import React, {
   useCallback,
@@ -23,9 +22,11 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Image } from "@/components/common/ServerImage";
 import { Text } from "@/components/common/Text";
 import useRouter from "@/hooks/useAppRouter";
 import { useFavorite } from "@/hooks/useFavorite";
+import { useSheetOpenState } from "@/hooks/useSheetOpenState";
 import {
   audioStorageEvents,
   deleteTrack,
@@ -36,6 +37,7 @@ import {
 } from "@/providers/AudioStorage";
 import { apiAtom, userAtom } from "@/providers/JellyfinProvider";
 import { useMusicPlayer } from "@/providers/MusicPlayerProvider";
+import { getJellyfinHeadersForUrl } from "@/utils/customHeaders";
 import { getAudioStreamUrl } from "@/utils/jellyfin/audio/getAudioStreamUrl";
 import { getPrimaryImageUrl } from "@/utils/jellyfin/image/getPrimaryImageUrl";
 
@@ -114,10 +116,7 @@ export const TrackOptionsSheet: React.FC<Props> = ({
     return getPrimaryImageUrl({ api, item: track });
   }, [api, track]);
 
-  useEffect(() => {
-    if (open) bottomSheetModalRef.current?.present();
-    else bottomSheetModalRef.current?.dismiss();
-  }, [open]);
+  const handleDismissed = useSheetOpenState(bottomSheetModalRef, open);
 
   const handleSheetChanges = useCallback(
     (index: number) => {
@@ -177,6 +176,7 @@ export const TrackOptionsSheet: React.FC<Props> = ({
         await downloadTrack(track.Id, result.url, {
           permanent: true,
           container: result.mediaSource?.Container || undefined,
+          headers: getJellyfinHeadersForUrl(result.url, api?.basePath),
         });
       }
     } catch {
@@ -231,6 +231,7 @@ export const TrackOptionsSheet: React.FC<Props> = ({
   return (
     <BottomSheetModal
       ref={bottomSheetModalRef}
+      onDismiss={handleDismissed}
       enableDynamicSizing
       onChange={handleSheetChanges}
       backdropComponent={renderBackdrop}

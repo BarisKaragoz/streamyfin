@@ -1,8 +1,7 @@
-import { Feather, Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import type {
   BaseItemDto,
   BaseItemDtoQueryResult,
-  BaseItemKind,
 } from "@jellyfin/sdk/lib/generated-client/models";
 import {
   getItemsApi,
@@ -27,10 +26,12 @@ import {
   ScrollView,
   View,
 } from "react-native";
-import { Pressable } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button } from "@/components/Button";
+import { HeaderButton } from "@/components/common/HeaderButton";
+import { HeaderIcon } from "@/components/common/HeaderIcon";
 import { Text } from "@/components/common/Text";
+import { HomeHeroCarousel } from "@/components/home/HomeHeroCarousel";
 import { InfiniteScrollingCollectionList } from "@/components/home/InfiniteScrollingCollectionList";
 import { StreamystatsPromotedWatchlists } from "@/components/home/StreamystatsPromotedWatchlists";
 import { StreamystatsRecommendations } from "@/components/home/StreamystatsRecommendations";
@@ -43,7 +44,11 @@ import { useRefreshLibraryOnFocus } from "@/hooks/useRefreshLibraryOnFocus";
 import { useInvalidatePlaybackProgressCache } from "@/hooks/useRevalidatePlaybackProgressCache";
 import { useDownload } from "@/providers/DownloadProvider";
 import { useIntroSheet } from "@/providers/IntroSheetProvider";
-import { apiAtom, userAtom } from "@/providers/JellyfinProvider";
+import {
+  apiAtom,
+  pendingAccountSaveAtom,
+  userAtom,
+} from "@/providers/JellyfinProvider";
 import { SortByOption, SortOrderOption } from "@/utils/atoms/filters";
 import { useSettings } from "@/utils/atoms/settings";
 import { eventBus } from "@/utils/eventBus";
@@ -61,6 +66,7 @@ type InfiniteScrollingCollectionListSection = {
   pageSize?: number;
   priority?: 1 | 2; // 1 = high priority (loads first), 2 = low priority
   parentId?: string; // Library ID for "See All" navigation
+  showParentTitle?: boolean;
 };
 
 type MediaListSectionType = {
@@ -100,6 +106,9 @@ const HomeMobile = () => {
   const [loadedSections, setLoadedSections] = useState<Set<string>>(new Set());
   const { showIntro } = useIntroSheet();
   const queryClient = useQueryClient();
+  // Gate the intro so it can't steal presentation from the post-login
+  // save-account sheet (both are BottomSheetModals): wait until no save is pending.
+  const pendingAccountSave = useAtomValue(pendingAccountSaveAtom);
 
   // Fallback refresh for newly added content when returning to the home screen
   // (primary path is the LibraryChanged WebSocket event).
@@ -108,7 +117,9 @@ const HomeMobile = () => {
   // Show intro modal on first launch
   useEffect(() => {
     const hasShownIntro = storage.getBoolean("hasShownIntro");
-    if (!hasShownIntro) {
+    // Defer while the save-account sheet is up; this effect re-runs and schedules
+    // the intro once the sheet is dismissed (pendingAccountSaveAtom cleared).
+    if (!hasShownIntro && !pendingAccountSave) {
       const timer = setTimeout(() => {
         showIntro();
       }, 1000);
@@ -117,7 +128,7 @@ const HomeMobile = () => {
         clearTimeout(timer);
       };
     }
-  }, [showIntro]);
+  }, [showIntro, pendingAccountSave]);
 
   useEffect(() => {
     if (isConnected && !prevIsConnected.current) {
@@ -140,18 +151,17 @@ const HomeMobile = () => {
     }
     navigation.setOptions({
       headerLeft: () => (
-        <Pressable
+        <HeaderButton
+          placement='left'
           onPress={() => {
             router.push("/(auth)/downloads");
           }}
-          style={{ marginRight: Platform.OS === "android" ? 16 : 0 }}
         >
-          <Feather
-            name='download'
-            color={hasDownloads ? Colors.primary : "white"}
-            size={24}
+          <HeaderIcon
+            name='downloads'
+            tintColor={hasDownloads ? Colors.primary : "white"}
           />
-        </Pressable>
+        </HeaderButton>
       ),
     });
   }, [navigation, router, hasDownloads]);
@@ -198,19 +208,30 @@ const HomeMobile = () => {
     staleTime: 60 * 1000,
   });
 
-  const userViews = useMemo(
-    () => data?.filter((l) => !settings?.hiddenLibraries?.includes(l.Id!)),
-    [data, settings?.hiddenLibraries],
-  );
+  const latestMediaLibraries = useMemo(() => {
+    const excludedIds = new Set([
+      ...(settings.hiddenLibraries ?? []),
+      ...(user?.Configuration?.LatestItemsExcludes ?? []),
+    ]);
+    const excludedTypes = new Set([
+      "playlists",
+      "livetv",
+      "boxsets",
+      "channels",
+      "folders",
+    ]);
 
-  const collections = useMemo(() => {
-    const allow = ["movies", "tvshows"];
-    return (
-      userViews?.filter(
-        (c) => c.CollectionType && allow.includes(c.CollectionType),
-      ) || []
+    return (data ?? []).filter(
+      (library) =>
+        library.Id &&
+        !excludedIds.has(library.Id) &&
+        (!library.CollectionType || !excludedTypes.has(library.CollectionType)),
     );
-  }, [userViews]);
+  }, [
+    data,
+    settings.hiddenLibraries,
+    user?.Configuration?.LatestItemsExcludes,
+  ]);
 
   const refetch = async () => {
     setLoading(true);
@@ -219,42 +240,6 @@ const HomeMobile = () => {
     await invalidateCache();
     setLoading(false);
   };
-
-  const createCollectionConfig = useCallback(
-    (
-      title: string,
-      queryKey: string[],
-      includeItemTypes: BaseItemKind[],
-      parentId: string | undefined,
-      pageSize: number = 10,
-    ): InfiniteScrollingCollectionListSection => ({
-      title,
-      queryKey,
-      queryFn: async ({ pageParam = 0 }) => {
-        if (!api) return [];
-        // getLatestMedia doesn't support startIndex, so we fetch all and slice client-side
-        const allData =
-          (
-            await getUserLibraryApi(api).getLatestMedia({
-              userId: user?.Id,
-              limit: 10,
-              fields: ["PrimaryImageAspectRatio"],
-              imageTypeLimit: 1,
-              enableImageTypes: ["Primary", "Backdrop", "Thumb"],
-              includeItemTypes,
-              parentId,
-            })
-          ).data || [];
-
-        // Simulate pagination by slicing
-        return allData.slice(pageParam, pageParam + pageSize);
-      },
-      type: "InfiniteScrollingCollectionList",
-      pageSize,
-      parentId,
-    }),
-    [api, user?.Id],
-  );
 
   // Extracted so the same fetch can power both the useInfiniteQuery in
   // InfiniteScrollingCollectionList and the atomic dual-refresh effect below.
@@ -300,26 +285,43 @@ const HomeMobile = () => {
   const defaultSections = useMemo(() => {
     if (!api || !user?.Id) return [];
 
-    const latestMediaViews = collections.map((c) => {
-      const includeItemTypes: BaseItemKind[] =
-        c.CollectionType === "tvshows" || c.CollectionType === "movies"
-          ? []
-          : ["Movie"];
-      const title = t("home.recently_added_in", { libraryName: c.Name });
-      const queryKey: string[] = [
-        "home",
-        `recentlyAddedIn${c.CollectionType}`,
-        user.Id!,
-        c.Id!,
-      ];
-      return createCollectionConfig(
-        title || "",
-        queryKey,
-        includeItemTypes,
-        c.Id,
-        10,
+    const latestMediaViews =
+      latestMediaLibraries.map<InfiniteScrollingCollectionListSection>(
+        (library) => {
+          const title = t("home.recently_added_in", {
+            libraryName: library.Name,
+          });
+          const limit = library.CollectionType === "music" ? 30 : 16;
+          return {
+            title: title || "",
+            queryKey: [
+              "home",
+              "latestMedia",
+              api.basePath,
+              user.Id,
+              library.Id,
+            ],
+            queryFn: async ({ pageParam = 0 }) => {
+              if (pageParam > 0) return [];
+
+              return (
+                await getUserLibraryApi(api).getLatestMedia({
+                  userId: user.Id,
+                  parentId: library.Id,
+                  limit,
+                  fields: ["PrimaryImageAspectRatio", "Path"],
+                  imageTypeLimit: 1,
+                  enableImageTypes: ["Primary", "Backdrop", "Thumb"],
+                })
+              ).data;
+            },
+            type: "InfiniteScrollingCollectionList",
+            pageSize: limit + 1,
+            parentId: library.Id,
+            showParentTitle: true,
+          };
+        },
       );
-    });
 
     // Helper to sort items by most recent activity
     const sortByRecentActivity = (items: BaseItemDto[]): BaseItemDto[] => {
@@ -352,7 +354,7 @@ const HomeMobile = () => {
                 getItemsApi(api).getResumeItems({
                   userId: user.Id,
                   enableImageTypes: ["Primary", "Backdrop", "Thumb"],
-                  includeItemTypes: ["Movie", "Series", "Episode"],
+                  includeItemTypes: ["Movie", "Episode"],
                   startIndex: 0,
                   limit: 20,
                 }),
@@ -391,7 +393,7 @@ const HomeMobile = () => {
                 await getItemsApi(api).getResumeItems({
                   userId: user.Id,
                   enableImageTypes: ["Primary", "Backdrop", "Thumb"],
-                  includeItemTypes: ["Movie", "Series", "Episode"],
+                  includeItemTypes: ["Movie", "Episode"],
                   startIndex: pageParam,
                   limit: 10,
                 })
@@ -459,9 +461,8 @@ const HomeMobile = () => {
   }, [
     api,
     user?.Id,
-    collections,
+    latestMediaLibraries,
     t,
-    createCollectionConfig,
     fetchSuggestedMoviesPage,
     fetchSuggestedShowsPage,
     settings?.streamyStatsMovieRecommendations,
@@ -732,6 +733,7 @@ const HomeMobile = () => {
         className='flex flex-col space-y-4'
         style={{ paddingTop: Platform.OS === "android" ? 10 : 0 }}
       >
+        <HomeHeroCarousel />
         {sections.map((section, index) => {
           // Render Streamystats sections after Recently Added sections
           // For default sections: place after Recently Added, before Suggested Movies (if present)
@@ -806,6 +808,7 @@ const HomeMobile = () => {
                       : undefined
                   }
                   onPressSeeAll={handleSeeAll}
+                  showParentTitle={section.showParentTitle}
                 />
                 {streamystatsSections}
               </View>

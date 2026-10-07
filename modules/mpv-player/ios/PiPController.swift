@@ -16,6 +16,8 @@ protocol PiPControllerDelegate: AnyObject {
 }
 
 final class PiPController: NSObject {
+    private static weak var automaticStartOwner: PiPController?
+
     private var pipController: AVPictureInPictureController?
     private weak var sampleBufferDisplayLayer: AVSampleBufferDisplayLayer?
     
@@ -24,24 +26,16 @@ final class PiPController: NSObject {
     // Timebase for PiP progress tracking
     private var timebase: CMTimebase?
     
-    // Track current time for PiP progress
-    private var currentTime: CMTime = .zero
-    private var currentDuration: Double = 0
-    
-    var isPictureInPictureSupported: Bool {
-        return AVPictureInPictureController.isPictureInPictureSupported()
-    }
-    
     var isPictureInPictureActive: Bool {
         return pipController?.isPictureInPictureActive ?? false
     }
     
-    var isPictureInPicturePossible: Bool {
-        return pipController?.isPictureInPicturePossible ?? false
-    }
-    
-    init(sampleBufferDisplayLayer: AVSampleBufferDisplayLayer) {
+    init(
+        sampleBufferDisplayLayer: AVSampleBufferDisplayLayer,
+        delegate: PiPControllerDelegate
+    ) {
         self.sampleBufferDisplayLayer = sampleBufferDisplayLayer
+        self.delegate = delegate
         super.init()
         setupTimebase()
         setupPictureInPicture()
@@ -67,11 +61,17 @@ final class PiPController: NSObject {
     }
     
     private func setupPictureInPicture() {
-        guard isPictureInPictureSupported,
-              let displayLayer = sampleBufferDisplayLayer else {
+        guard AVPictureInPictureController.isPictureInPictureSupported() else {
+            Logger.shared.log(
+                "PiP: setup skipped — AVPictureInPictureController.isPictureInPictureSupported() == false",
+                type: "Warn")
             return
         }
-        
+        guard let displayLayer = sampleBufferDisplayLayer else {
+            Logger.shared.log("PiP: setup skipped — no sample buffer display layer", type: "Warn")
+            return
+        }
+
         let contentSource = AVPictureInPictureController.ContentSource(
             sampleBufferDisplayLayer: displayLayer,
             playbackDelegate: self
@@ -80,32 +80,56 @@ final class PiPController: NSObject {
         pipController = AVPictureInPictureController(contentSource: contentSource)
         pipController?.delegate = self
         pipController?.requiresLinearPlayback = false
+        Logger.shared.log(
+            "PiP: controller created (possible=\(pipController?.isPictureInPicturePossible ?? false))",
+            type: "Info")
+    }
+
+    /// Enable/disable auto-PiP ("swipe up while playing").
+    ///
+    /// AVKit permits one inline auto-start owner. Transfer that eligibility
+    /// explicitly so an outgoing player cannot block the visible one.
+    func setAutoStartEnabled(_ enabled: Bool) {
         #if !os(tvOS)
-        pipController?.canStartPictureInPictureAutomaticallyFromInline = true
+        guard let pipController else { return }
+        if enabled {
+            if Self.automaticStartOwner !== self {
+                Self.automaticStartOwner?.pipController?.canStartPictureInPictureAutomaticallyFromInline = false
+                Self.automaticStartOwner = self
+            }
+        } else if Self.automaticStartOwner === self {
+            Self.automaticStartOwner = nil
+        }
+        pipController.canStartPictureInPictureAutomaticallyFromInline = enabled
         #endif
     }
-    
+
     func startPictureInPicture() {
-        guard let pipController = pipController,
-              pipController.isPictureInPicturePossible else {
+        guard let pipController = pipController else {
+            Logger.shared.log("PiP: start refused — controller was never created", type: "Error")
             return
         }
-        
+        Logger.shared.log(
+            "PiP: start requested — supported=\(AVPictureInPictureController.isPictureInPictureSupported()) "
+                + "possible=\(pipController.isPictureInPicturePossible) "
+                + "active=\(pipController.isPictureInPictureActive) "
+                + "layerReady=\(sampleBufferDisplayLayer?.isReadyForMoreMediaData ?? false) "
+                + "hasTimebase=\(sampleBufferDisplayLayer?.controlTimebase != nil)",
+            type: "Info")
+        // The silent one: AVKit only lets PiP begin once it considers the
+        // source eligible, and there is no callback for "never became
+        // possible" — so log the refusal rather than returning into the void.
+        guard pipController.isPictureInPicturePossible else {
+            Logger.shared.log(
+                "PiP: start aborted — isPictureInPicturePossible == false", type: "Error")
+            return
+        }
+
         pipController.startPictureInPicture()
     }
     
     func stopPictureInPicture() {
         pipController?.stopPictureInPicture()
-    }
-    
-    func invalidate() {
-        if Thread.isMainThread {
-            pipController?.invalidatePlaybackState()
-        } else {
-            DispatchQueue.main.async { [weak self] in
-                self?.pipController?.invalidatePlaybackState()
-            }
-        }
     }
     
     func updatePlaybackState() {
@@ -121,27 +145,17 @@ final class PiPController: NSObject {
         }
     }
     
-    /// Updates the current playback time for PiP progress display
-    func setCurrentTime(_ time: CMTime) {
-        currentTime = time
-        
-        // Update the timebase to reflect current position
+    func setCurrentTimeFromSeconds(_ seconds: Double) {
+        guard seconds >= 0 else { return }
         if let tb = timebase {
-            CMTimebaseSetTime(tb, time: time)
+            CMTimebaseSetTime(
+                tb,
+                time: CMTime(seconds: seconds, preferredTimescale: 1000)
+            )
         }
-        
-        // Only invalidate when PiP is active to avoid unnecessary updates
         if isPictureInPictureActive {
             updatePlaybackState()
         }
-    }
-    
-    /// Updates the current playback time from seconds
-    func setCurrentTimeFromSeconds(_ seconds: Double, duration: Double) {
-        guard seconds >= 0 else { return }
-        currentDuration = duration
-        let time = CMTime(seconds: seconds, preferredTimescale: 1000)
-        setCurrentTime(time)
     }
     
     /// Updates the playback rate on the timebase (1.0 = playing, 0.0 = paused)
@@ -174,7 +188,7 @@ extension PiPController: AVPictureInPictureControllerDelegate {
     }
     
     func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-        print("Failed to start PiP: \(error)")
+        Logger.shared.log("PiP: failed to start — \(error.localizedDescription)", type: "Error")
         delegate?.pipController(self, didStartPictureInPicture: false)
     }
     

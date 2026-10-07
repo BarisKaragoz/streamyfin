@@ -3,13 +3,11 @@ import type {
   BaseItemKind,
 } from "@jellyfin/sdk/lib/generated-client/models";
 import { getItemsApi } from "@jellyfin/sdk/lib/utils/api";
-import { useAsyncDebouncer } from "@tanstack/react-pacer";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
-import { Image } from "expo-image";
 import { useLocalSearchParams, useNavigation, useSegments } from "expo-router";
 import { useAtom } from "jotai";
-import { orderBy, uniqBy } from "lodash";
+import { orderBy } from "lodash";
 import {
   useCallback,
   useEffect,
@@ -20,39 +18,45 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Platform, ScrollView, TouchableOpacity, View } from "react-native";
+import {
+  Platform,
+  RefreshControl,
+  ScrollView,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import ContinueWatchingPoster from "@/components/ContinueWatchingPoster";
+import { CardRow } from "@/components/cards/CardRow";
+import { Image } from "@/components/common/ServerImage";
 import { Text } from "@/components/common/Text";
 import {
   getItemNavigation,
   TouchableItemRouter,
 } from "@/components/common/TouchableItemRouter";
-import { ItemCardText } from "@/components/ItemCardText";
-import {
-  JellyseerrSearchSort,
-  JellyserrIndexPage,
-} from "@/components/jellyseerr/JellyseerrIndexPage";
-import MoviePoster from "@/components/posters/MoviePoster";
-import SeriesPoster from "@/components/posters/SeriesPoster";
 import { DiscoverFilters } from "@/components/search/DiscoverFilters";
 import { LoadingSkeleton } from "@/components/search/LoadingSkeleton";
 import { SearchItemWrapper } from "@/components/search/SearchItemWrapper";
 import { SearchTabButtons } from "@/components/search/SearchTabButtons";
 import { TVSearchPage } from "@/components/search/TVSearchPage";
+import {
+  SeerrIndexPage,
+  SeerrSearchSort,
+} from "@/components/seerr/SeerrIndexPage";
 import useRouter from "@/hooks/useAppRouter";
-import { useJellyseerr } from "@/hooks/useJellyseerr";
+import { useSeerr } from "@/hooks/useSeerr";
 import { useTVItemActionModal } from "@/hooks/useTVItemActionModal";
 import { apiAtom, userAtom } from "@/providers/JellyfinProvider";
 import { useSettings } from "@/utils/atoms/settings";
+import { getIntegrationHeaders } from "@/utils/customHeaders";
+import { isAbortLikeError } from "@/utils/errors";
 import { eventBus } from "@/utils/eventBus";
 import { getPrimaryImageUrl } from "@/utils/jellyfin/image/getPrimaryImageUrl";
-import { MediaType } from "@/utils/jellyseerr/server/constants/media";
-import type {
-  MovieResult,
-  PersonResult,
-  TvResult,
-} from "@/utils/jellyseerr/server/models/Search";
+import { logAndCaptureError } from "@/utils/log";
+import { isSeerrQuery } from "@/utils/seerr/queries";
+import { searchSeerr } from "@/utils/seerr/search";
+import { loadDiscoverSliders } from "@/utils/seerr/sliders";
+import type { MovieResult, PersonResult, TvResult } from "@/utils/seerr/types";
+import { MediaType } from "@/utils/seerr/types";
 import { createStreamystatsApi } from "@/utils/streamystats";
 
 type SearchType = "Library" | "Discover";
@@ -84,39 +88,39 @@ export default function SearchPage() {
   const { q } = params as { q: string };
 
   const [searchType, setSearchType] = useState<SearchType>("Library");
+
+  // Pulling down asks again for what the screen shows: Discover's rows and
+  // the results of either search.
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await queryClient.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "search" || isSeerrQuery(query.queryKey),
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  }, [queryClient]);
   const [search, setSearch] = useState<string>("");
 
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const abortControllerRef = useRef<AbortController | null>(null);
-
-  const searchDebouncer = useAsyncDebouncer(
-    async (query: string) => {
-      // Cancel previous in-flight requests
-      abortControllerRef.current?.abort();
-      abortControllerRef.current = new AbortController();
-      setDebouncedSearch(query);
-      return query;
-    },
-    { wait: 200 },
-  );
 
   useEffect(() => {
-    searchDebouncer.maybeExecute(search);
+    const timeout = setTimeout(() => setDebouncedSearch(search), 200);
+    return () => clearTimeout(timeout);
   }, [search]);
 
   const [api] = useAtom(apiAtom);
 
   const { settings } = useSettings();
-  const { jellyseerrApi } = useJellyseerr();
-  const [jellyseerrOrderBy, setJellyseerrOrderBy] =
-    useState<JellyseerrSearchSort>(
-      JellyseerrSearchSort[
-        JellyseerrSearchSort.DEFAULT
-      ] as unknown as JellyseerrSearchSort,
-    );
-  const [jellyseerrSortOrder, setJellyseerrSortOrder] = useState<
-    "asc" | "desc"
-  >("desc");
+  const { seerrApi } = useSeerr();
+  const [seerrOrderBy, setSeerrOrderBy] = useState<SeerrSearchSort>(
+    SeerrSearchSort[SeerrSearchSort.DEFAULT] as unknown as SeerrSearchSort,
+  );
+  const [seerrSortOrder, setSeerrSortOrder] = useState<"asc" | "desc">("desc");
 
   const searchEngine = useMemo(() => {
     return settings?.searchEngine || "Jellyfin";
@@ -217,7 +221,10 @@ export default function SearchPage() {
           .map((type) => encodeURIComponent(type))
           .join("&includeItemTypes=")}`;
 
-        const response1 = await axios.get(url, { signal });
+        const response1 = await axios.get(url, {
+          signal,
+          headers: getIntegrationHeaders("marlin"),
+        });
 
         const ids = response1.data.ids;
 
@@ -235,9 +242,10 @@ export default function SearchPage() {
 
         return (response2.data.Items as BaseItemDto[]) || [];
       } catch (error) {
-        // Silently handle aborted requests
-        if (error instanceof Error && error.name === "AbortError") {
-          return [];
+        // Aborted requests are routine; anything else used to render as
+        // "no results" with no trace of the failure.
+        if (!isAbortLikeError(error)) {
+          logAndCaptureError("Search request failed", error);
         }
         return [];
       }
@@ -274,9 +282,8 @@ export default function SearchPage() {
 
         return (searchApi.data.Items as BaseItemDto[]) || [];
       } catch (error) {
-        // Silently handle aborted requests
-        if (error instanceof Error && error.name === "AbortError") {
-          return [];
+        if (!isAbortLikeError(error)) {
+          logAndCaptureError("Music search request failed", error);
         }
         return [];
       }
@@ -305,6 +312,8 @@ export default function SearchPage() {
         },
         hideWhenScrolling: false,
         autoFocus: false,
+        // Android: color of the user-typed text (was dark and unreadable on the dark header)
+        textColor: "#fff",
         // Android: placeholder and icon color
         hintTextColor: "#fff",
         headerIconColor: "#fff",
@@ -329,55 +338,55 @@ export default function SearchPage() {
 
   const { data: movies, isFetching: l1 } = useQuery({
     queryKey: ["search", "movies", debouncedSearch],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       searchFn({
         query: debouncedSearch,
         types: ["Movie"],
-        signal: abortControllerRef.current?.signal,
+        signal,
       }),
     enabled: searchType === "Library" && debouncedSearch.length > 0,
   });
 
   const { data: series, isFetching: l2 } = useQuery({
     queryKey: ["search", "series", debouncedSearch],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       searchFn({
         query: debouncedSearch,
         types: ["Series"],
-        signal: abortControllerRef.current?.signal,
+        signal,
       }),
     enabled: searchType === "Library" && debouncedSearch.length > 0,
   });
 
   const { data: episodes, isFetching: l3 } = useQuery({
     queryKey: ["search", "episodes", debouncedSearch],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       searchFn({
         query: debouncedSearch,
         types: ["Episode"],
-        signal: abortControllerRef.current?.signal,
+        signal,
       }),
     enabled: searchType === "Library" && debouncedSearch.length > 0,
   });
 
   const { data: collections, isFetching: l7 } = useQuery({
     queryKey: ["search", "collections", debouncedSearch],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       searchFn({
         query: debouncedSearch,
         types: ["BoxSet"],
-        signal: abortControllerRef.current?.signal,
+        signal,
       }),
     enabled: searchType === "Library" && debouncedSearch.length > 0,
   });
 
   const { data: actors, isFetching: l8 } = useQuery({
     queryKey: ["search", "actors", debouncedSearch],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       searchFn({
         query: debouncedSearch,
         types: ["Person"],
-        signal: abortControllerRef.current?.signal,
+        signal,
       }),
     enabled: searchType === "Library" && debouncedSearch.length > 0,
   });
@@ -385,44 +394,44 @@ export default function SearchPage() {
   // Music search queries - always use Jellyfin since Streamystats doesn't support music
   const { data: artists, isFetching: l9 } = useQuery({
     queryKey: ["search", "artists", debouncedSearch],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       jellyfinSearchFn({
         query: debouncedSearch,
         types: ["MusicArtist"],
-        signal: abortControllerRef.current?.signal,
+        signal,
       }),
     enabled: searchType === "Library" && debouncedSearch.length > 0,
   });
 
   const { data: albums, isFetching: l10 } = useQuery({
     queryKey: ["search", "albums", debouncedSearch],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       jellyfinSearchFn({
         query: debouncedSearch,
         types: ["MusicAlbum"],
-        signal: abortControllerRef.current?.signal,
+        signal,
       }),
     enabled: searchType === "Library" && debouncedSearch.length > 0,
   });
 
   const { data: songs, isFetching: l11 } = useQuery({
     queryKey: ["search", "songs", debouncedSearch],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       jellyfinSearchFn({
         query: debouncedSearch,
         types: ["Audio"],
-        signal: abortControllerRef.current?.signal,
+        signal,
       }),
     enabled: searchType === "Library" && debouncedSearch.length > 0,
   });
 
   const { data: playlists, isFetching: l12 } = useQuery({
     queryKey: ["search", "playlists", debouncedSearch],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       jellyfinSearchFn({
         query: debouncedSearch,
         types: ["Playlist"],
-        signal: abortControllerRef.current?.signal,
+        signal,
       }),
     enabled: searchType === "Library" && debouncedSearch.length > 0,
   });
@@ -464,99 +473,85 @@ export default function SearchPage() {
     [from, router],
   );
 
-  // Jellyseerr search for TV
-  const { data: jellyseerrTVResults, isFetching: jellyseerrTVLoading } =
-    useQuery({
-      queryKey: ["search", "jellyseerr", "tv", debouncedSearch],
-      queryFn: async () => {
-        const params = {
-          query: new URLSearchParams(debouncedSearch || "").toString(),
-        };
-        return await Promise.all([
-          jellyseerrApi?.search({ ...params, page: 1 }),
-          jellyseerrApi?.search({ ...params, page: 2 }),
-          jellyseerrApi?.search({ ...params, page: 3 }),
-          jellyseerrApi?.search({ ...params, page: 4 }),
-        ]).then((all) =>
-          uniqBy(
-            all.flatMap((v) => v?.results || []),
-            "id",
-          ),
-        );
-      },
-      enabled:
-        Platform.isTV &&
-        !!jellyseerrApi &&
-        searchType === "Discover" &&
-        debouncedSearch.length > 0,
-    });
+  // Seerr search for TV
+  const { data: seerrTVResults, isFetching: seerrTVLoading } = useQuery({
+    queryKey: ["search", "seerr", "tv", debouncedSearch],
+    queryFn: async () => {
+      return await searchSeerr(seerrApi, debouncedSearch);
+    },
+    enabled:
+      Platform.isTV &&
+      !!seerrApi &&
+      searchType === "Discover" &&
+      debouncedSearch.length > 0,
+  });
 
-  // Process Jellyseerr results for TV
-  const jellyseerrMovieResults = useMemo(
+  // Process Seerr results for TV
+  const seerrMovieResults = useMemo(
     () =>
       orderBy(
-        jellyseerrTVResults?.filter(
+        seerrTVResults?.filter(
           (r) => r.mediaType === MediaType.MOVIE,
         ) as MovieResult[],
         [(m) => m?.title?.toLowerCase() === debouncedSearch.toLowerCase()],
         "desc",
       ),
-    [jellyseerrTVResults, debouncedSearch],
+    [seerrTVResults, debouncedSearch],
   );
 
-  const jellyseerrTvResults = useMemo(
+  const seerrTvResults = useMemo(
     () =>
       orderBy(
-        jellyseerrTVResults?.filter(
+        seerrTVResults?.filter(
           (r) => r.mediaType === MediaType.TV,
         ) as TvResult[],
         [(t) => t?.name?.toLowerCase() === debouncedSearch.toLowerCase()],
         "desc",
       ),
-    [jellyseerrTVResults, debouncedSearch],
+    [seerrTVResults, debouncedSearch],
   );
 
-  const jellyseerrPersonResults = useMemo(
+  const seerrPersonResults = useMemo(
     () =>
       orderBy(
-        jellyseerrTVResults?.filter(
+        seerrTVResults?.filter(
           (r) => r.mediaType === "person",
         ) as PersonResult[],
         [(p) => p?.name?.toLowerCase() === debouncedSearch.toLowerCase()],
         "desc",
       ),
-    [jellyseerrTVResults, debouncedSearch],
+    [seerrTVResults, debouncedSearch],
   );
 
-  const jellyseerrTVNoResults = useMemo(() => {
+  const seerrTVNoResults = useMemo(() => {
     return (
-      !jellyseerrMovieResults?.length &&
-      !jellyseerrTvResults?.length &&
-      !jellyseerrPersonResults?.length
+      !seerrMovieResults?.length &&
+      !seerrTvResults?.length &&
+      !seerrPersonResults?.length
     );
-  }, [jellyseerrMovieResults, jellyseerrTvResults, jellyseerrPersonResults]);
+  }, [seerrMovieResults, seerrTvResults, seerrPersonResults]);
 
   // Fetch discover settings for TV (when no search query in Discover mode)
   const { data: discoverSliders } = useQuery({
-    queryKey: ["search", "jellyseerr", "discoverSettings", "tv"],
-    queryFn: async () => jellyseerrApi?.discoverSettings(),
+    queryKey: ["search", "seerr", "discoverSettings", "tv"],
+    queryFn: () => loadDiscoverSliders(seerrApi),
     enabled:
       Platform.isTV &&
-      !!jellyseerrApi &&
+      !!seerrApi &&
       searchType === "Discover" &&
       debouncedSearch.length === 0,
   });
 
-  // TV Jellyseerr press handlers
-  const handleJellyseerrMoviePress = useCallback(
+  // TV Seerr press handlers
+  const handleSeerrMoviePress = useCallback(
     (item: MovieResult) => {
       router.push({
-        pathname: "/(auth)/(tabs)/(search)/jellyseerr/page",
+        pathname: "/(auth)/(tabs)/(search)/seerr/page",
         params: {
           mediaTitle: item.title,
           releaseYear: String(new Date(item.releaseDate || "").getFullYear()),
           canRequest: "true",
-          posterSrc: jellyseerrApi?.imageProxy(item.posterPath) || "",
+          posterSrc: seerrApi?.imageProxy(item.posterPath) || "",
           mediaType: MediaType.MOVIE,
           id: String(item.id),
           backdropPath: item.backdropPath || "",
@@ -564,18 +559,18 @@ export default function SearchPage() {
         },
       });
     },
-    [router, jellyseerrApi],
+    [router, seerrApi],
   );
 
-  const handleJellyseerrTvPress = useCallback(
+  const handleSeerrTvPress = useCallback(
     (item: TvResult) => {
       router.push({
-        pathname: "/(auth)/(tabs)/(search)/jellyseerr/page",
+        pathname: "/(auth)/(tabs)/(search)/seerr/page",
         params: {
           mediaTitle: item.name,
           releaseYear: String(new Date(item.firstAirDate || "").getFullYear()),
           canRequest: "true",
-          posterSrc: jellyseerrApi?.imageProxy(item.posterPath) || "",
+          posterSrc: seerrApi?.imageProxy(item.posterPath) || "",
           mediaType: MediaType.TV,
           id: String(item.id),
           backdropPath: item.backdropPath || "",
@@ -583,12 +578,12 @@ export default function SearchPage() {
         },
       });
     },
-    [router, jellyseerrApi],
+    [router, seerrApi],
   );
 
-  const handleJellyseerrPersonPress = useCallback(
+  const handleSeerrPersonPress = useCallback(
     (item: PersonResult) => {
-      router.push(`/(auth)/jellyseerr/person/${item.id}` as any);
+      router.push(`/(auth)/seerr/person/${item.id}` as any);
     },
     [router],
   );
@@ -615,15 +610,15 @@ export default function SearchPage() {
         onItemLongPress={showItemActions}
         searchType={searchType}
         setSearchType={setSearchType}
-        showDiscover={!!jellyseerrApi}
-        jellyseerrMovies={jellyseerrMovieResults}
-        jellyseerrTv={jellyseerrTvResults}
-        jellyseerrPersons={jellyseerrPersonResults}
-        jellyseerrLoading={jellyseerrTVLoading}
-        jellyseerrNoResults={jellyseerrTVNoResults}
-        onJellyseerrMoviePress={handleJellyseerrMoviePress}
-        onJellyseerrTvPress={handleJellyseerrTvPress}
-        onJellyseerrPersonPress={handleJellyseerrPersonPress}
+        showDiscover={!!seerrApi}
+        seerrMovies={seerrMovieResults}
+        seerrTv={seerrTvResults}
+        seerrPersons={seerrPersonResults}
+        seerrLoading={seerrTVLoading}
+        seerrNoResults={seerrTVNoResults}
+        onSeerrMoviePress={handleSeerrMoviePress}
+        onSeerrTvPress={handleSeerrTvPress}
+        onSeerrPersonPress={handleSeerrPersonPress}
         discoverSliders={discoverSliders}
       />
     );
@@ -633,6 +628,9 @@ export default function SearchPage() {
     <ScrollView
       keyboardDismissMode='on-drag'
       contentInsetAdjustmentBehavior='automatic'
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={refresh} />
+      }
       contentContainerStyle={{
         paddingLeft: insets.left,
         paddingRight: insets.right,
@@ -643,7 +641,7 @@ export default function SearchPage() {
         className='flex flex-col'
         style={{ paddingTop: Platform.OS === "android" ? 10 : 0 }}
       >
-        {jellyseerrApi && (
+        {seerrApi && (
           <View className='pl-4 pr-4 flex flex-row'>
             <SearchTabButtons
               searchType={searchType}
@@ -657,10 +655,10 @@ export default function SearchPage() {
                 <DiscoverFilters
                   searchFilterId={searchFilterId}
                   orderFilterId={orderFilterId}
-                  jellyseerrOrderBy={jellyseerrOrderBy}
-                  setJellyseerrOrderBy={setJellyseerrOrderBy}
-                  jellyseerrSortOrder={jellyseerrSortOrder}
-                  setJellyseerrSortOrder={setJellyseerrSortOrder}
+                  seerrOrderBy={seerrOrderBy}
+                  setSeerrOrderBy={setSeerrOrderBy}
+                  seerrSortOrder={seerrSortOrder}
+                  setSeerrSortOrder={setSeerrSortOrder}
                   t={t}
                 />
               )}
@@ -673,87 +671,40 @@ export default function SearchPage() {
 
         {searchType === "Library" ? (
           <View className={l1 || l2 ? "opacity-0" : "opacity-100"}>
-            <SearchItemWrapper
-              header={t("search.movies")}
-              items={movies}
-              renderItem={(item: BaseItemDto) => (
-                <TouchableItemRouter
-                  key={item.Id}
-                  className='flex flex-col w-28 mr-2'
-                  item={item}
-                >
-                  <MoviePoster item={item} key={item.Id} />
-                  <Text numberOfLines={2} className='mt-2'>
-                    {item.Name}
-                  </Text>
-                  <Text className='opacity-50 text-xs'>
-                    {item.ProductionYear}
-                  </Text>
-                </TouchableItemRouter>
-              )}
+            <CardRow
+              enableActionSheet
+              title={t("search.movies")}
+              items={movies ?? []}
+              kind='portrait'
+              hideIfEmpty
             />
-            <SearchItemWrapper
-              items={series}
-              header={t("search.series")}
-              renderItem={(item: BaseItemDto) => (
-                <TouchableItemRouter
-                  key={item.Id}
-                  item={item}
-                  className='flex flex-col w-28 mr-2'
-                >
-                  <SeriesPoster item={item} key={item.Id} />
-                  <Text numberOfLines={2} className='mt-2'>
-                    {item.Name}
-                  </Text>
-                  <Text className='opacity-50 text-xs'>
-                    {item.ProductionYear}
-                  </Text>
-                </TouchableItemRouter>
-              )}
+            <CardRow
+              enableActionSheet
+              title={t("search.series")}
+              items={series ?? []}
+              kind='portrait'
+              hideIfEmpty
             />
-            <SearchItemWrapper
-              items={episodes}
-              header={t("search.episodes")}
-              renderItem={(item: BaseItemDto) => (
-                <TouchableItemRouter
-                  item={item}
-                  key={item.Id}
-                  className='flex flex-col w-44 mr-2'
-                >
-                  <ContinueWatchingPoster item={item} />
-                  <ItemCardText item={item} />
-                </TouchableItemRouter>
-              )}
+            <CardRow
+              enableActionSheet
+              title={t("search.episodes")}
+              items={episodes ?? []}
+              kind='wide'
+              hideIfEmpty
             />
-            <SearchItemWrapper
-              items={collections}
-              header={t("search.collections")}
-              renderItem={(item: BaseItemDto) => (
-                <TouchableItemRouter
-                  key={item.Id}
-                  item={item}
-                  className='flex flex-col w-28 mr-2'
-                >
-                  <MoviePoster item={item} key={item.Id} />
-                  <Text numberOfLines={2} className='mt-2'>
-                    {item.Name}
-                  </Text>
-                </TouchableItemRouter>
-              )}
+            <CardRow
+              enableActionSheet
+              title={t("search.collections")}
+              items={collections ?? []}
+              kind='portrait'
+              hideIfEmpty
             />
-            <SearchItemWrapper
-              items={actors}
-              header={t("search.actors")}
-              renderItem={(item: BaseItemDto) => (
-                <TouchableItemRouter
-                  item={item}
-                  key={item.Id}
-                  className='flex flex-col w-28 mr-2'
-                >
-                  <MoviePoster item={item} />
-                  <ItemCardText item={item} />
-                </TouchableItemRouter>
-              )}
+            <CardRow
+              enableActionSheet
+              title={t("search.actors")}
+              items={actors ?? []}
+              kind='portrait'
+              hideIfEmpty
             />
             {/* Music search results */}
             <SearchItemWrapper
@@ -923,10 +874,10 @@ export default function SearchPage() {
             />
           </View>
         ) : (
-          <JellyserrIndexPage
+          <SeerrIndexPage
             searchQuery={debouncedSearch}
-            sortType={jellyseerrOrderBy}
-            order={jellyseerrSortOrder}
+            sortType={seerrOrderBy}
+            order={seerrSortOrder}
           />
         )}
 

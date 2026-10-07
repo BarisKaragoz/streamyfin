@@ -7,15 +7,14 @@
     ":enableVulnerabilityAlertsWithLabel(security)",
     ":semanticCommits",
     ":timezone(Etc/UTC)",
-    "group:testNonMajor",
-    "group:monorepos",
     "helpers:pinGitHubActionDigests",
     "customManagers:biomeVersions",
     ":automergeBranch",
     ":automergeRequireAllStatusChecks"
   ],
-  "addLabels": ["dependencies"],
+  "addLabels": ["📦 dependencies"],
   "rebaseWhen": "conflicted",
+  "suppressNotifications": ["prEditedNotification", "prIgnoreNotification"],
   "ignorePaths": ["**/node_modules/**"],
   "ignoreUnstable": true,
   "minimumReleaseAge": "3 days",
@@ -24,15 +23,25 @@
   "commitMessagePrefix": "chore(deps):",
   "osvVulnerabilityAlerts": true,
   "configMigration": true,
-  "separateMinorPatch": true,
+  "separateMinorPatch": false,
+  "prConcurrentLimit": 8,
+  "prHourlyLimit": 4,
   "customManagers": [
     {
       "customType": "regex",
       "managerFilePatterns": ["/\\.ya?ml$/"],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+xcode-version:\\s*[\"']?(?<currentValue>[^\"'\\s]+)"
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+[A-Za-z0-9._-]+:\\s*[\"']?(?<currentValue>[^\"'\\s]+)"
       ],
       "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}loose{{/if}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the Bun version pinned in eas.json build profiles (strict JSON can't hold inline annotations)",
+      "managerFilePatterns": ["/(^|/)eas\\.json$/"],
+      "matchStrings": ["\"bun\"\\s*:\\s*\"(?<currentValue>[^\"]+)\""],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "bun"
     }
   ],
   "customDatasources": {
@@ -44,22 +53,63 @@
       ]
     }
   },
-  "lockFileMaintenance": {
-    "vulnerabilityAlerts": {
-      "enabled": true,
-      "addLabels": ["security", "vulnerability"],
-      "assigneesFromCodeOwners": true,
-      "commitMessageSuffix": " [SECURITY]"
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "addLabels": ["🚨 security"],
+    "assigneesFromCodeOwners": true,
+    "commitMessageSuffix": " [SECURITY]"
+  },
+  "packageRules": [
+    {
+      "description": "Moved by hand, never one pull request at a time: the Expo SDK sets these versions (jest-expo and the Jest it is built on included) and they move with `expo install --fix` when the SDK moves, and reanimated/worklets and mmkv/nitro-modules only build in step. react-native is the react-native-tvos fork under an alias, which `expo install` cannot match, so it is also moved by hand, to the fork's release for the SDK. Native modules listed in `expo.install.exclude` are left out on purpose: the SDK no longer moves them, so Renovate is what keeps them current",
+      "matchPackageNames": [
+        "expo",
+        "expo-*",
+        "@expo/*",
+        "react",
+        "react-dom",
+        "react-native",
+        "react-native-tvos",
+        "react-native-web",
+        "@react-native-tvos/*",
+        "jest-expo",
+        "jest",
+        "@types/jest",
+        "react-native-gesture-handler",
+        "@react-native-community/netinfo",
+        "react-native-reanimated",
+        "react-native-worklets",
+        "react-native-mmkv",
+        "react-native-nitro-modules"
+      ],
+      "enabled": false
     },
-    "packageRules": [
-      {
-        "description": "Group minor and patch GitHub Action updates into a single PR",
-        "matchManagers": ["github-actions"],
-        "groupName": "CI dependencies",
-        "groupSlug": "ci-deps",
-        "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
-        "automerge": true
-      }
-    ]
-  }
+    {
+      "description": "nativewind 2.x / tailwindcss 3.x are frozen on purpose — v4 requires a full styling refactor and is explicitly out of scope (see issue #1831)",
+      "matchPackageNames": ["nativewind", "tailwindcss"],
+      "enabled": false
+    },
+    {
+      "description": "Low-risk dev tooling and type packages: automerge non-major updates once all status checks are green",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "description": "Group minor and patch GitHub Action updates into a single PR",
+      "matchManagers": ["github-actions"],
+      "groupName": "CI dependencies",
+      "groupSlug": "ci-deps",
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
+      "automerge": true
+    },
+    {
+      "description": "androidx and other Google-hosted Maven packages resolve from Google's Maven repository (not Maven Central)",
+      "matchDatasources": ["maven"],
+      "registryUrls": [
+        "https://dl.google.com/dl/android/maven2/",
+        "https://repo.maven.apache.org/maven2/"
+      ]
+    }
+  ]
 }

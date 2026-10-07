@@ -1,6 +1,15 @@
 import * as Crypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
+import {
+  bumpCustomHeadersVersion,
+  deleteSecureCustomHeaderValues,
+  resolveCustomHeaderValues,
+  secureCustomHeaderMetadata,
+} from "./customHeaders/secureValues";
+import type { CustomHeader } from "./customHeaders/types";
+import { logAndCaptureError } from "./log";
 import { storage } from "./mmkv";
+import { deleteSeerrPassword } from "./seerrPassword";
 
 const CREDENTIAL_KEY_PREFIX = "credential_";
 const MULTI_ACCOUNT_MIGRATED_KEY = "multiAccountMigrated";
@@ -53,6 +62,8 @@ export interface SavedServer {
   name?: string;
   accounts: SavedServerAccount[];
   localNetworkConfig?: LocalNetworkConfig;
+  /** Proxy auth headers for this server; values live in SecureStore. */
+  customHeaders?: CustomHeader[];
 }
 
 /**
@@ -158,6 +169,25 @@ export async function getAccountCredential(
 }
 
 /**
+ * The credential a saved account signs in with, or null once an account that
+ * has none is forgotten.
+ *
+ * The account list and the credentials are two stores, and an account can be
+ * listed with no credential behind it (REACT-NATIVE-2K, on tvOS). Such an
+ * entry can never sign in, so it comes off the list the way an account whose
+ * token was rejected does, and signing in again puts it back.
+ */
+export async function getCredentialOrForgetAccount(
+  serverUrl: string,
+  userId: string,
+): Promise<ServerCredential | null> {
+  const credential = await getAccountCredential(serverUrl, userId);
+  if (credential) return credential;
+  await deleteAccountCredential(serverUrl, userId);
+  return null;
+}
+
+/**
  * Delete credential for a specific account.
  */
 export async function deleteAccountCredential(
@@ -166,6 +196,10 @@ export async function deleteAccountCredential(
 ): Promise<void> {
   const key = credentialKey(serverUrl, userId);
   await SecureStore.deleteItemAsync(key);
+
+  // Forgetting the account also forgets its Seerr password: it must
+  // not outlive the credential it belongs to.
+  await deleteSeerrPassword(serverUrl, userId);
 
   // Remove account from previousServers
   removeAccountFromServer(serverUrl, userId);
@@ -201,27 +235,6 @@ export async function hasAccountCredential(
   const key = credentialKey(serverUrl, userId);
   const stored = await SecureStore.getItemAsync(key);
   return stored !== null;
-}
-
-/**
- * Delete all credentials for all accounts on all servers.
- */
-export async function clearAllCredentials(): Promise<void> {
-  const previousServers = getPreviousServers();
-
-  for (const server of previousServers) {
-    for (const account of server.accounts) {
-      const key = credentialKey(server.address, account.userId);
-      await SecureStore.deleteItemAsync(key);
-    }
-  }
-
-  // Clear all accounts from servers
-  const clearedServers = previousServers.map((server) => ({
-    ...server,
-    accounts: [],
-  }));
-  storage.set("previousServers", JSON.stringify(clearedServers));
 }
 
 /**
@@ -321,11 +334,14 @@ export async function removeServerFromList(serverUrl: string): Promise<void> {
       const key = credentialKey(serverUrl, account.userId);
       await SecureStore.deleteItemAsync(key);
     }
+    deleteSecureCustomHeaderValues(server.customHeaders ?? []);
   }
 
   // Remove server from list
   const filtered = servers.filter((s) => s.address !== serverUrl);
   storage.set("previousServers", JSON.stringify(filtered));
+  // The header values are gone; anything caching them has to re-read.
+  bumpCustomHeadersVersion();
 }
 
 /**
@@ -387,6 +403,54 @@ export function getServerLocalConfig(
   const servers = getPreviousServers();
   const server = servers.find((s) => s.address === serverUrl);
   return server?.localNetworkConfig;
+}
+
+/**
+ * Replace the custom proxy headers for a server. Values are moved into
+ * SecureStore; only their names and SecureStore keys reach MMKV.
+ *
+ * The server entry is created if it doesn't exist yet — headers are configured
+ * during login, before the server has any accounts.
+ */
+export function updateServerCustomHeaders(
+  serverUrl: string,
+  headers: CustomHeader[],
+): void {
+  const servers = getPreviousServers();
+  const existingIndex = servers.findIndex((s) => s.address === serverUrl);
+  const previousHeaders =
+    existingIndex >= 0 ? (servers[existingIndex].customHeaders ?? []) : [];
+
+  // `headers` carries the values as typed; re-reading them from SecureStore
+  // here would hand back the previous secret and silently discard the edit.
+  const customHeaders = secureCustomHeaderMetadata(
+    `server:${serverUrl}`,
+    headers,
+    previousHeaders,
+  );
+
+  if (existingIndex >= 0) {
+    servers[existingIndex] = { ...servers[existingIndex], customHeaders };
+  } else {
+    // Same placement and cap as addServerToList — headers are configured before
+    // the connection succeeds, so this can be what creates the entry.
+    servers.unshift({ address: serverUrl, accounts: [], customHeaders });
+    servers.splice(10);
+  }
+
+  storage.set("previousServers", JSON.stringify(servers));
+  bumpCustomHeadersVersion();
+}
+
+/**
+ * Custom proxy headers for a server, with their SecureStore values filled in.
+ */
+export function getServerCustomHeaders(serverUrl: string): CustomHeader[] {
+  const servers = getPreviousServers();
+  const server = servers.find((s) => s.address === serverUrl);
+  // This is a read: it must not write, because it runs during render (every
+  // <Image> resolves its headers through it).
+  return resolveCustomHeaderValues(server?.customHeaders ?? []);
 }
 
 /**
@@ -470,8 +534,13 @@ export async function migrateToMultiAccount(): Promise<void> {
 
     storage.set("previousServers", JSON.stringify(migratedServers));
     storage.set(MULTI_ACCOUNT_MIGRATED_KEY, true);
-  } catch {
-    // If parsing fails, reset to empty array
+  } catch (error) {
+    // If parsing fails, reset to empty array. This destroys the user's saved
+    // server list, so it must never happen silently.
+    logAndCaptureError(
+      "Saved-servers migration failed; resetting previousServers",
+      error,
+    );
     storage.set("previousServers", "[]");
     storage.set(MULTI_ACCOUNT_MIGRATED_KEY, true);
   }

@@ -1,7 +1,11 @@
 package expo.modules.mpvplayer
 
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
+import android.os.Build
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import expo.modules.mpvplayer.nativeplayer.engine.VideoLoadConfig
 
 class MpvPlayerModule : Module() {
     override fun definition() = ModuleDefinition {
@@ -21,6 +25,14 @@ class MpvPlayerModule : Module() {
             sendEvent("onChange", mapOf("value" to value))
         }
 
+        // mpv decodes AV1 on any Android device (dav1d in software), so direct play never
+        // needs this. It decides whether Jellyfin may transcode *to* AV1: mpv only hands
+        // AV1 to MediaCodec (hwdec-codecs includes av1) when a hardware decoder exists,
+        // otherwise every transcoded frame would be decoded on the CPU.
+        Function("supportsAv1HardwareDecode") {
+            hasHardwareAv1Decoder()
+        }
+
         // Enables the module to be used as a native view.
         View(MpvPlayerView::class) {
             // All video load options are passed via a single "source" prop
@@ -28,7 +40,11 @@ class MpvPlayerModule : Module() {
                 if (source == null) return@Prop
                 
                 val urlString = source["url"] as? String ?: return@Prop
-                
+
+                // Parse cache config if provided (mirrors iOS)
+                @Suppress("UNCHECKED_CAST")
+                val cacheConfig = source["cacheConfig"] as? Map<String, Any?>
+
                 @Suppress("UNCHECKED_CAST")
                 val config = VideoLoadConfig(
                     url = urlString,
@@ -38,15 +54,23 @@ class MpvPlayerModule : Module() {
                     autoplay = (source["autoplay"] as? Boolean) ?: true,
                     initialSubtitleId = (source["initialSubtitleId"] as? Number)?.toInt(),
                     initialAudioId = (source["initialAudioId"] as? Number)?.toInt(),
-                    voDriver = source["voDriver"] as? String
+                    loop = (source["loop"] as? Boolean) ?: false,
+                    voDriver = source["voDriver"] as? String,
+                    cacheEnabled = cacheConfig?.get("enabled") as? String,
+                    cacheSeconds = (cacheConfig?.get("cacheSeconds") as? Number)?.toInt(),
+                    demuxerMaxBytes = (cacheConfig?.get("maxBytes") as? Number)?.toInt(),
+                    demuxerMaxBackBytes = (cacheConfig?.get("maxBackBytes") as? Number)?.toInt()
                 )
                 
                 view.loadVideo(config)
             }
 
             // Now Playing metadata for media controls (iOS-only, no-op on Android)
-            // Android handles media session differently via MediaSessionCompat
-            Prop("nowPlayingMetadata") { _: MpvPlayerView, _: Map<String, String>? ->
+            // Android handles media session differently via MediaSessionCompat.
+            // Typed loosely on purpose: the metadata carries nested values
+            // (artworkHeaders), and a Map<String, String> signature makes Expo
+            // reject the whole prop rather than ignore what it can't convert.
+            Prop("nowPlayingMetadata") { _: MpvPlayerView, _: Map<String, Any?>? ->
                 // No-op on Android - media session integration would require MediaSessionCompat
             }
 
@@ -58,6 +82,15 @@ class MpvPlayerModule : Module() {
             // Async function to pause video
             AsyncFunction("pause") { view: MpvPlayerView ->
                 view.pause()
+            }
+
+            // Stop playback and release the MediaCodec decoder + demuxer.
+            // Does not synchronously tear down the native mpv handle (see
+            // MPVLib / MpvPlayerView.destroy docs). Call before navigating
+            // away from the player screen to avoid OOM during screen
+            // transitions on low-RAM devices.
+            AsyncFunction("destroy") { view: MpvPlayerView ->
+                view.destroy()
             }
 
             // Async function to seek to position
@@ -73,6 +106,11 @@ class MpvPlayerModule : Module() {
             // Async function to set playback speed
             AsyncFunction("setSpeed") { view: MpvPlayerView, speed: Double ->
                 view.setSpeed(speed)
+            }
+
+            // Async function to mute the player without touching device volume
+            AsyncFunction("setMute") { view: MpvPlayerView, muted: Boolean ->
+                view.setMute(muted)
             }
 
             // Function to get current speed
@@ -142,6 +180,10 @@ class MpvPlayerModule : Module() {
                 view.setSubtitleScale(scale)
             }
 
+            AsyncFunction("setSubtitleDelay") { view: MpvPlayerView, seconds: Double ->
+                view.setSubtitleDelay(seconds)
+            }
+
             AsyncFunction("setSubtitleMarginY") { view: MpvPlayerView, margin: Int ->
                 view.setSubtitleMarginY(margin)
             }
@@ -152,6 +194,10 @@ class MpvPlayerModule : Module() {
 
             AsyncFunction("setSubtitleAlignY") { view: MpvPlayerView, alignment: String ->
                 view.setSubtitleAlignY(alignment)
+            }
+
+            AsyncFunction("setSubtitleStyle") { view: MpvPlayerView, config: Map<String, Any> ->
+                view.setSubtitleStyle(config)
             }
 
             AsyncFunction("setSubtitleFontSize") { view: MpvPlayerView, size: Int ->
@@ -202,3 +248,25 @@ class MpvPlayerModule : Module() {
         }
     }
 }
+
+/** Whether a hardware MediaCodec decoder advertises AV1 (`video/av01`). */
+private fun hasHardwareAv1Decoder(): Boolean =
+    try {
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
+            !info.isEncoder &&
+                info.supportedTypes.any { it.equals("video/av01", ignoreCase = true) } &&
+                isHardwareCodec(info)
+        }
+    } catch (e: Exception) {
+        // A vendor codec list that fails to load is no reason to advertise AV1.
+        false
+    }
+
+private fun isHardwareCodec(info: MediaCodecInfo): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        info.isHardwareAccelerated && !info.isSoftwareOnly
+    } else {
+        // Before API 29 the platform's software codecs are only recognisable by name.
+        val name = info.name.lowercase()
+        !name.startsWith("omx.google.") && !name.startsWith("c2.android.")
+    }
