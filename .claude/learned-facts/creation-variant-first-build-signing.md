@@ -1,0 +1,19 @@
+# Fork Signing: Own Team ID, Own Bundle IDs, build-device.sh
+
+**Date**: 2026-07-18
+**Category**: build-ios
+**Key files**: `app.config.ts`, `plugins/withDownloadLiveActivity.ts`, `ios/Creation.xcworkspace` (generated)
+
+## Detail
+
+Because the Creation variant changes `config.name`, `prebuild:creation` names the whole generated native project after it: the workspace is `ios/Creation.xcworkspace` with target/scheme `Creation` — not `Streamyfin.xcworkspace`. Don't go looking for a Streamyfin workspace after a creation prebuild.
+
+**Root cause of recurring signing failures (found 2026-07-19):** upstream's `app.json` ships `ios.appleTeamId: "MWD5K362T8"` (Fredrik Burmester's team). Baris has no account for that team — theirs is `G4V3C7URJ9` ("Baris Karagoz") — so every prebuild baked the wrong `DEVELOPMENT_TEAM` into the project, CLI builds failed with `No profiles found` / `No Account for Team "MWD5K362T8"`, and manually selecting the team in Xcode was wiped by the next prebuild. Fixed by overriding `config.ios.appleTeamId = "G4V3C7URJ9"` unconditionally in `app.config.ts` (kept out of `app.json` to reduce upstream merge friction).
+
+**Upstream's bundle ID is unusable too:** `com.fredrikburmester.streamyfin` is the published App Store app's ID — Apple reserves published IDs globally, so registering it to another team fails with `Failed Registering Bundle Identifier ... not available` (and the wildcard-profile fallback can't carry the push/Wi-Fi entitlements). `app.config.ts` therefore also overrides the default variant to `com.baris.streamyfin` (Android package too), and the Creation variant uses `com.baris.streamyfin.creation` (renamed from `com.fredrikburmester.streamyfin.creation` on 2026-07-19 for consistency).
+
+For device installs use `bun run ios:device` / `bun run ios:creation:device` (wrap `scripts/ios/build-device.sh`): signed Release xcodebuild with `-allowProvisioningUpdates` (can mint profiles for new bundle IDs), then install/launch via `xcrun devicectl`. To find the user's team ID from installed profiles: `security cms -D -i ~/Library/*/Provisioning\ Profiles/*.mobileprovision` and read `TeamIdentifier`.
+
+**Operational rule (confirmed 2026-07-19):** `expo run:ios --device` only succeeds when a matching provisioning profile already exists on disk. Any provisioning change — new/renamed bundle ID, expired profile, new device, renewed certificate — makes it fail with entitlement errors against the wildcard `*` profile (`doesn't include the aps-environment and com.apple.developer.networking.wifi-info entitlements`). That error signature means: run the `:device` script once to mint the profile, after which `expo run:ios` works again.
+
+**Extension targets and the Xcode account (found 2026-10-07, v0.55.1 sync):** Expo applies `ios.appleTeamId` to the app target only. Config plugins that add native targets (`withDownloadLiveActivity`, `withTVOSTopShelf`) get no team, because upstream relies on EAS to assign it, so local device builds fail with `Signing for "StreamyfinDownloadActivity" requires a development team`. The fork sets `DEVELOPMENT_TEAM` from `config.ios.appleTeamId` in `withDownloadLiveActivity.ts`; `withTVOSTopShelf.ts` still lacks it, so a TV device build would hit the same error. Separately, `-allowProvisioningUpdates` only works with an Apple ID signed into Xcode (Settings → Accounts). With none it fails with `No Accounts`, and any new entitlement (here the `group.com.baris.streamyfin.downloads` App Group) then fails as `Provisioning profile ... doesn't support the ... App Group`. Check with `defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists`: an empty list means no account. The real errors are in `ios/build/Logs/Build/*.xcactivitylog`; the `:device` script's console only prints `exited with code 65`.
