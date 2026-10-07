@@ -86,7 +86,7 @@ Build/iOS:
 - `xcode-build-workspace-not-project` | Missing Expo/ExpoModulesCore modulemap = building .xcodeproj; open .xcworkspace
 - `hermes-duplicate-framework-after-rn-upgrade` | RN 0.82+ renames hermes→hermesvm.framework; stale copy → simulator DuplicateIdentifier; clean build folder
 - `mpvkit-nettle-linker-warnings-harmless` | Release-link `_nettle_*` symbol warnings from prebuilt MPVKit are noise; ignore Pods/xcframework warnings
-- `creation-variant-first-build-signing` | Fork signing: upstream's appleTeamId AND published bundle ID are unusable — app.config.ts overrides both (team G4V3C7URJ9, com.baris.streamyfin); wildcard-profile entitlement errors ⇒ run the :device script to mint a profile
+- `creation-variant-first-build-signing` | Fork signing: upstream's appleTeamId AND published bundle ID are unusable — app.config.ts overrides both (team G4V3C7URJ9, com.baris.streamyfin); plugin-added extensions need the team too, and Xcode needs a signed-in account; wildcard-profile entitlement errors ⇒ run the :device script to mint a profile
 - `release-device-builds-use-no-bundler` | Release --device builds: add --no-bundler; log streamer otherwise hangs and swallows Ctrl+C
 - `moved-ios-folder-stale-local-state` | ios/ copied from another machine: stale .xcode.env.local NODE_BINARY path breaks builds; prefer prebuild over moving
 
