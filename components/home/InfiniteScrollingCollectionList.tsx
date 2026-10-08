@@ -2,6 +2,7 @@ import type { BaseItemDto } from "@jellyfin/sdk/lib/generated-client/models";
 import {
   type QueryFunction,
   type QueryKey,
+  type StaleTime,
   useInfiniteQuery,
 } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
@@ -23,6 +24,8 @@ interface Props extends ViewProps {
   showParentTitle?: boolean;
   enabled?: boolean;
   onLoaded?: () => void;
+  /** How long fetched items stay fresh; defaults to one minute. */
+  staleTime?: StaleTime;
 }
 
 export const InfiniteScrollingCollectionList: React.FC<Props> = ({
@@ -37,6 +40,7 @@ export const InfiniteScrollingCollectionList: React.FC<Props> = ({
   showParentTitle = false,
   enabled = true,
   onLoaded,
+  staleTime = 60 * 1000,
   ...props
 }) => {
   const effectivePageSize = Math.max(1, pageSize);
@@ -62,7 +66,7 @@ export const InfiniteScrollingCollectionList: React.FC<Props> = ({
       return allPages.reduce((acc, page) => acc + page.length, 0);
     },
     initialPageParam: 0,
-    staleTime: 60 * 1000, // 1 minute
+    staleTime,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
     enabled,

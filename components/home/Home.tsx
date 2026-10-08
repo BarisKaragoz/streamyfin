@@ -12,8 +12,8 @@ import {
 } from "@jellyfin/sdk/lib/utils/api";
 import {
   type QueryFunction,
+  type StaleTime,
   useQuery,
-  useQueryClient,
 } from "@tanstack/react-query";
 import { useNavigation, useSegments } from "expo-router";
 import { useAtomValue } from "jotai";
@@ -38,10 +38,16 @@ import { StreamystatsRecommendations } from "@/components/home/StreamystatsRecom
 import { Loader } from "@/components/Loader";
 import { MediaListSection } from "@/components/medialists/MediaListSection";
 import { Colors } from "@/constants/Colors";
+import { SUGGESTED_ROWS_STALE_TIME } from "@/constants/Home";
 import useRouter from "@/hooks/useAppRouter";
 import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 import { useRefreshLibraryOnFocus } from "@/hooks/useRefreshLibraryOnFocus";
 import { useInvalidatePlaybackProgressCache } from "@/hooks/useRevalidatePlaybackProgressCache";
+import {
+  suggestedMoviesQueryKey,
+  suggestedShowsQueryKey,
+  useSuggestedRowsRefresh,
+} from "@/hooks/useSuggestedRowsRefresh";
 import { useDownload } from "@/providers/DownloadProvider";
 import { useIntroSheet } from "@/providers/IntroSheetProvider";
 import {
@@ -67,6 +73,7 @@ type InfiniteScrollingCollectionListSection = {
   priority?: 1 | 2; // 1 = high priority (loads first), 2 = low priority
   parentId?: string; // Library ID for "See All" navigation
   showParentTitle?: boolean;
+  staleTime?: StaleTime;
 };
 
 type MediaListSectionType = {
@@ -77,12 +84,6 @@ type MediaListSectionType = {
 };
 
 type Section = InfiniteScrollingCollectionListSection | MediaListSectionType;
-
-// Module-level flag: resets on JS reload (cold app start), persists across
-// component re-mounts within the same session. Used to refresh the random
-// "Suggested Movies" and "Suggested Shows" rows together exactly once per
-// fresh app start, since their cache is otherwise persisted to MMKV.
-let hasRefreshedSuggestionsThisSession = false;
 
 const HomeMobile = () => {
   const router = useRouter();
@@ -105,7 +106,6 @@ const HomeMobile = () => {
   const invalidateCache = useInvalidatePlaybackProgressCache();
   const [loadedSections, setLoadedSections] = useState<Set<string>>(new Set());
   const { showIntro } = useIntroSheet();
-  const queryClient = useQueryClient();
   // Gate the intro so it can't steal presentation from the post-login
   // save-account sheet (both are BottomSheetModals): wait until no save is pending.
   const pendingAccountSave = useAtomValue(pendingAccountSaveAtom);
@@ -233,16 +233,8 @@ const HomeMobile = () => {
     user?.Configuration?.LatestItemsExcludes,
   ]);
 
-  const refetch = async () => {
-    setLoading(true);
-    setLoadedSections(new Set());
-    await refreshStreamyfinPluginSettings();
-    await invalidateCache();
-    setLoading(false);
-  };
-
   // Extracted so the same fetch can power both the useInfiniteQuery in
-  // InfiniteScrollingCollectionList and the atomic dual-refresh effect below.
+  // InfiniteScrollingCollectionList and useSuggestedRowsRefresh below.
   const fetchSuggestedMoviesPage = useCallback(
     async (pageParam: number = 0): Promise<BaseItemDto[]> => {
       if (!api || !user?.Id) return [];
@@ -431,13 +423,14 @@ const HomeMobile = () => {
         ? [
             {
               title: t("home.suggested_movies"),
-              queryKey: ["home", "suggestedMovies", user?.Id],
+              queryKey: suggestedMoviesQueryKey(user?.Id),
               queryFn: async ({ pageParam = 0 }: { pageParam?: number }) =>
                 fetchSuggestedMoviesPage(pageParam),
               type: "InfiniteScrollingCollectionList" as const,
               orientation: "vertical" as const,
               pageSize: 10,
               priority: 2 as const,
+              staleTime: SUGGESTED_ROWS_STALE_TIME,
             },
           ]
         : []),
@@ -446,13 +439,14 @@ const HomeMobile = () => {
         ? [
             {
               title: t("home.suggested_shows"),
-              queryKey: ["home", "suggestedShows", user?.Id],
+              queryKey: suggestedShowsQueryKey(user?.Id),
               queryFn: async ({ pageParam = 0 }: { pageParam?: number }) =>
                 fetchSuggestedShowsPage(pageParam),
               type: "InfiniteScrollingCollectionList" as const,
               orientation: "vertical" as const,
               pageSize: 10,
               priority: 2 as const,
+              staleTime: SUGGESTED_ROWS_STALE_TIME,
             },
           ]
         : []),
@@ -569,74 +563,34 @@ const HomeMobile = () => {
     [],
   );
 
-  // On the first fresh app start, refresh Suggested Movies + Suggested Shows
-  // together so the random picks update in lockstep instead of showing
-  // yesterday's persisted cache or popping in at different times. Both
-  // fetches run in parallel, but neither cache is updated until both have
-  // resolved — so the rows re-render in the same frame even though the
-  // server-side Suggestions endpoint is heavier than the Items endpoint.
   const usingCustomSections = !!settings?.home?.sections;
   const hasSuggestedMovies =
     !usingCustomSections && !settings?.streamyStatsMovieRecommendations;
   const hasSuggestedShows =
     !usingCustomSections && !settings?.streamyStatsSeriesRecommendations;
 
-  useEffect(() => {
-    if (
-      hasRefreshedSuggestionsThisSession ||
-      !api ||
-      !user?.Id ||
-      !allHighPriorityLoaded
-    )
-      return;
-    if (!hasSuggestedMovies && !hasSuggestedShows) return;
+  const refreshSuggestions = useSuggestedRowsRefresh({
+    userId: user?.Id,
+    ready: !!api && allHighPriorityLoaded,
+    fetchMovies: hasSuggestedMovies ? fetchSuggestedMoviesPage : undefined,
+    fetchShows: hasSuggestedShows ? fetchSuggestedShowsPage : undefined,
+  });
 
-    hasRefreshedSuggestionsThisSession = true;
-    const userId = user.Id;
-    const moviesKey = ["home", "suggestedMovies", userId];
-    const showsKey = ["home", "suggestedShows", userId];
-
-    void (async () => {
-      try {
-        const [moviesPage, showsPage] = await Promise.all([
-          hasSuggestedMovies
-            ? fetchSuggestedMoviesPage(0)
-            : Promise.resolve(null),
-          hasSuggestedShows
-            ? fetchSuggestedShowsPage(0)
-            : Promise.resolve(null),
-        ]);
-
-        // Both setQueryData calls run in the same microtask → React batches
-        // the observer notifications into a single re-render, so both rows
-        // swap to the new picks simultaneously.
-        if (moviesPage) {
-          queryClient.setQueryData(moviesKey, {
-            pages: [moviesPage],
-            pageParams: [0],
-          });
-        }
-        if (showsPage) {
-          queryClient.setQueryData(showsKey, {
-            pages: [showsPage],
-            pageParams: [0],
-          });
-        }
-      } catch {
-        // Allow a retry on the next fresh start if either fetch failed.
-        hasRefreshedSuggestionsThisSession = false;
-      }
-    })();
-  }, [
-    api,
-    user?.Id,
-    allHighPriorityLoaded,
-    hasSuggestedMovies,
-    hasSuggestedShows,
-    queryClient,
-    fetchSuggestedMoviesPage,
-    fetchSuggestedShowsPage,
-  ]);
+  // loadedSections is left alone on purpose: a row reports itself loaded once
+  // per mount, so an emptied set never fills again and every row below the
+  // high priority ones stays switched off, skipped by the invalidation below.
+  const refetch = async () => {
+    setLoading(true);
+    await refreshStreamyfinPluginSettings();
+    await Promise.all([
+      invalidateCache(),
+      // The suggested rows are static, so the invalidation above skips them;
+      // a pull is one of the two moments their picks change. On failure the
+      // current picks stay.
+      refreshSuggestions().catch(() => {}),
+    ]);
+    setLoading(false);
+  };
 
   if (!isConnected || serverConnected !== true) {
     let title = "";
@@ -809,6 +763,7 @@ const HomeMobile = () => {
                   }
                   onPressSeeAll={handleSeeAll}
                   showParentTitle={section.showParentTitle}
+                  staleTime={section.staleTime}
                 />
                 {streamystatsSections}
               </View>
