@@ -7,21 +7,37 @@
 # letting xcodebuild fetch/create the managed profile itself (uses the Apple ID
 # you are signed into Xcode with).
 #
-# Usage: build-device.sh <scheme>          (Streamyfin | Creation)
+# Usage: build-device.sh <scheme>          (Streamyfin | Creation | Sports)
 #   DEVICE_UDID=<udid> to target a specific device; defaults to the first
 #   connected iPhone reported by `xcrun devicectl list devices`.
 set -euo pipefail
 
-SCHEME="${1:?usage: build-device.sh <scheme> (e.g. Streamyfin or Creation)}"
+SCHEME="${1:?usage: build-device.sh <scheme> (Streamyfin, Creation or Sports)}"
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IOS_DIR="$ROOT/ios"
 WORKSPACE="$IOS_DIR/$SCHEME.xcworkspace"
 DERIVED="$IOS_DIR/build"
 
+case "$SCHEME" in
+  Creation) PREBUILD="bun run prebuild:creation" ;;
+  Sports) PREBUILD="bun run prebuild:sports" ;;
+  *) PREBUILD="bun run prebuild" ;;
+esac
+
 if [[ ! -d "$WORKSPACE" ]]; then
-  echo "error: $WORKSPACE not found — run the matching prebuild first" >&2
-  echo "  (bun run prebuild → Streamyfin, bun run prebuild:creation → Creation)" >&2
+  echo "error: $WORKSPACE not found, run the matching prebuild first:" >&2
+  echo "  $PREBUILD" >&2
+  exit 1
+fi
+
+# prebuild:tv writes an Apple TV project into the same ios/ folder, under the
+# same name. xcodebuild then rejects the iPhone destination with a list of every
+# simulator on the Mac, without saying that the project is the problem.
+if grep -q 'SDKROOT = appletvos;' "$IOS_DIR/$SCHEME.xcodeproj/project.pbxproj" 2>/dev/null; then
+  echo "error: ios/ holds the Apple TV project the last bun run prebuild:tv made" >&2
+  echo "  regenerate it for iPhone first:" >&2
+  echo "  $PREBUILD" >&2
   exit 1
 fi
 
@@ -51,12 +67,21 @@ import json, sys
 
 devices = json.load(open(sys.argv[1]))["result"]["devices"]
 
-def connected(d):
-    return d.get("connectionProperties", {}).get("tunnelState") == "connected"
+def tunnel(d):
+    return d.get("connectionProperties", {}).get("tunnelState")
 
-picked = next((d for d in devices if connected(d)), None)
-if picked is None and devices:
-    picked = devices[0]
+def iphone(d):
+    hardware = d.get("hardwareProperties", {})
+    return hardware.get("reality") == "physical" and hardware.get("platform") == "iOS"
+
+# devicectl lists the simulators on this Mac too, and those cannot install a
+# device build. An iPhone it can reach shows "disconnected" until something
+# opens its tunnel, the install included; one out of reach shows "unavailable".
+# No apostrophes in here: bash 3.2 matches quotes inside a heredoc within $().
+reachable = [d for d in devices if iphone(d) and tunnel(d) != "unavailable"]
+picked = next((d for d in reachable if tunnel(d) == "connected"), None)
+if picked is None and reachable:
+    picked = reachable[0]
 if picked:
     print(picked["identifier"])
 PY

@@ -66,15 +66,33 @@ if [[ "$INSTALL" == 1 || -z "$ABIS" ]] && command -v adb >/dev/null 2>&1; then
   if [[ -n "${ANDROID_SERIAL:-}" ]]; then
     [[ "$(adb get-state 2>/dev/null)" == device ]] && HAVE_DEVICE=1
   else
-    case "$(adb devices | awk 'NR > 1 && $2 == "device"' | wc -l | tr -d ' ')" in
-      0) ;;
-      1) HAVE_DEVICE=1 ;;
-      *)
-        echo "error: several devices attached, pick one with ANDROID_SERIAL=<serial>" >&2
-        adb devices -l >&2
-        exit 1
-        ;;
-    esac
+    # adb separates the name from the state with a tab, and a name can hold
+    # spaces: wireless debugging names a second registration "<name> (2)...".
+    SERIALS=()
+    while IFS=$'\t' read -r serial state; do
+      [[ "$state" == device ]] && SERIALS+=("$serial")
+    done < <(adb devices | tail -n +2)
+
+    if [[ ${#SERIALS[@]} -gt 1 ]]; then
+      # That second registration is the same TV, so it reports the same
+      # hardware serial. Only different devices need the user to choose.
+      # adb shell reads stdin, so it gets none: it would swallow the caller's.
+      hardware_serial() { adb -s "$1" shell getprop ro.serialno </dev/null | tr -d '\r'; }
+      FIRST="$(hardware_serial "${SERIALS[0]}")"
+      for serial in "${SERIALS[@]:1}"; do
+        if [[ -z "$FIRST" || "$(hardware_serial "$serial")" != "$FIRST" ]]; then
+          echo "error: several devices attached, pick one with ANDROID_SERIAL=<serial>" >&2
+          adb devices -l >&2
+          exit 1
+        fi
+      done
+    fi
+
+    if [[ ${#SERIALS[@]} -gt 0 ]]; then
+      # Every adb call below goes to this one, even while adb lists two.
+      export ANDROID_SERIAL="${SERIALS[0]}"
+      HAVE_DEVICE=1
+    fi
   fi
 fi
 
