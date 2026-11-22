@@ -139,15 +139,17 @@ const deferred = () => {
 // every test signs in as a user of its own.
 let userCount = 0;
 
-beforeEach(() => {
+const resetMocks = () => {
   mockUser = { Id: `user-${++userCount}`, Configuration: {} };
   mockSettingsRefresh = Promise.resolve();
   mockLatestMedia = [movie("Alien")];
   mockSuggestionCalls = 0;
   mockGetSuggestions.mockClear();
-});
+};
 
-const renderHome = async () => {
+beforeEach(resetMocks);
+
+const renderHome = async ({ timeout }: { timeout?: number } = {}) => {
   // No garbage collection timer nor retry: either keeps Jest from exiting.
   const client = new QueryClient({
     defaultOptions: {
@@ -161,9 +163,21 @@ const renderHome = async () => {
       </QueryClientProvider>
     </JotaiProvider>,
   );
-  await screen.findByText(`${RECENTLY_ADDED}: Alien`);
+  await screen.findByText(`${RECENTLY_ADDED}: Alien`, {}, { timeout });
   return view;
 };
+
+// React Native's index requires each component the first time something
+// renders it, and on a cold Jest cache Babel compiles it right then. Home's
+// first full render pulls in ScrollView, RefreshControl, the loader and the
+// icons: about a second of compiling, more in a busy suite, and it used to land
+// inside the first test's one second wait for the screen. One render here pays
+// for it before any test starts its clock.
+beforeAll(async () => {
+  resetMocks();
+  const view = await renderHome({ timeout: 15_000 });
+  await view.unmount();
+}, 30_000);
 
 /**
  * Pulls Home down. The plugin settings request is held open first, so the
