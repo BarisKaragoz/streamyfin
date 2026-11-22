@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import Module from "node:module";
 import { join } from "node:path";
-import type { ConfigContext } from "expo/config";
+import type { ConfigContext, ExpoConfig } from "expo/config";
 import resolveConfig from "./app.config";
 
 // Google Play rejects any new app or update that targets a lower API level
@@ -22,29 +22,34 @@ const catalogTargetSdk = Number(
 
 const appJson = JSON.parse(readFileSync(join(__dirname, "app.json"), "utf8"));
 
-/** The targetSdkVersion pinned in the resolved config; the last entry wins at prebuild. */
-const pinnedTargetSdk = (tv: boolean): number | undefined => {
+/** The config app.config.ts resolves for a phone or a TV build. */
+const resolveFor = (tv: boolean): ExpoConfig => {
   const previous = process.env.EXPO_TV;
   process.env.EXPO_TV = tv ? "1" : "0";
   try {
-    const { plugins = [] } = resolveConfig({
+    return resolveConfig({
       config: structuredClone(appJson.expo),
     } as ConfigContext);
-    const pins = plugins
-      .filter(
-        (
-          plugin,
-        ): plugin is [string, { android?: { targetSdkVersion?: number } }] =>
-          Array.isArray(plugin) && plugin[0] === "expo-build-properties",
-      )
-      .map(([, options]) => options?.android?.targetSdkVersion)
-      .filter((value) => value !== undefined);
-    return pins.at(-1);
   } finally {
     // Assigning undefined would store the string "undefined".
     if (previous === undefined) delete process.env.EXPO_TV;
     else process.env.EXPO_TV = previous;
   }
+};
+
+/** The targetSdkVersion pinned in the resolved config; the last entry wins at prebuild. */
+const pinnedTargetSdk = (tv: boolean): number | undefined => {
+  const { plugins = [] } = resolveFor(tv);
+  const pins = plugins
+    .filter(
+      (
+        plugin,
+      ): plugin is [string, { android?: { targetSdkVersion?: number } }] =>
+        Array.isArray(plugin) && plugin[0] === "expo-build-properties",
+    )
+    .map(([, options]) => options?.android?.targetSdkVersion)
+    .filter((value) => value !== undefined);
+  return pins.at(-1);
 };
 
 describe.each([
@@ -63,6 +68,13 @@ describe.each([
       catalogTargetSdk,
     );
   });
+});
+
+// The file lists only upstream's package name, so the Google Services Gradle
+// plugin failed the fork's TV build. Its one consumer, FCM through
+// expo-notifications, is not linked on TV anyway.
+test("TV builds leave google-services.json out", () => {
+  expect(resolveFor(true).android?.googleServicesFile).toBeUndefined();
 });
 
 // app.config.ts registers the tsx require hook for the Expo CLI. Registered

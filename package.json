@@ -19,6 +19,7 @@
     "ios:sports:device": "cross-env EXPO_TV=0 APP_VARIANT=sports bash scripts/ios/build-device.sh Sports",
     "android": "cross-env EXPO_TV=0 expo run:android",
     "android:tv": "cross-env EXPO_TV=1 expo run:android",
+    "android:tv:device": "cross-env EXPO_TV=1 bash scripts/android/build-tv-device.sh",
     "build:android:local": "cd android && cross-env NODE_ENV=production ./gradlew assembleRelease",
     "ios:unsigned-build": "cross-env EXPO_TV=0 bun scripts/ios/build-ios.ts --production",
     "ios:unsigned-build:tv": "cross-env EXPO_TV=1 bun scripts/ios/build-ios.ts --production",

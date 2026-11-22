@@ -95,6 +95,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   ios.bundleIdentifier = "com.baris.streamyfin";
   android.package = "com.baris.streamyfin";
 
+  // google-services.json lists only upstream's package name, so the Google
+  // Services Gradle plugin fails the build for ours. Its one consumer, FCM
+  // through expo-notifications, is not linked on TV (react-native.config.js).
+  if (process.env.EXPO_TV === "1") delete android.googleServicesFile;
+
   // Second app instance, installable alongside the default one
   if (process.env.APP_VARIANT === "creation") {
     config.name = "Creation";

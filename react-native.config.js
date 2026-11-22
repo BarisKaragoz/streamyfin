@@ -34,6 +34,11 @@ const dependencies = {
   "react-native-pager-view": disableForTV("react-native-pager-view"),
   "react-native-track-player": disableForTV("react-native-track-player"),
   "expo-location": disableForTV("expo-location"),
+  // Chromecast is off on TV and its config plugin is added for phones only
+  // (app.config.ts). Linked anyway, the library asks for
+  // play-services-cast-framework:+, and 23.0.0 needs compileSdk 37 and AGP 9.1.
+  // Its podspec is iOS only, so Apple TV already goes without it.
+  "react-native-google-cast": disableForTV("react-native-google-cast"),
 };
 
 // Filter out undefined values

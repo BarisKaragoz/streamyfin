@@ -137,6 +137,9 @@ bun run ios:device           # default app
 bun run ios:creation:device  # Creation variant
 bun run ios:sports:device    # Sports variant
 
+# Standalone Release APK installed on the Android TV adb is connected to
+bun run android:tv:device    # prebuilds android/ for TV if needed, builds only the TV's ABI
+
 # Quality
 bun run typecheck            # TypeScript
 bun run check                # Biome, read only
