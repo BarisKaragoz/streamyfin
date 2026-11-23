@@ -42,11 +42,10 @@ class TvRemoteKeyHandler(
                     viewModel.seekFeedbackVisible -> {
                         viewModel.hideSeekFeedback()
                     }
-                    viewModel.errorMessage != null -> {
-                        onExitRequested()
-                    }
+                    // Nothing left to close, so back leaves playback without
+                    // asking. Only the media Stop key still confirms.
                     else -> {
-                        viewModel.requestExitConfirmation()
+                        onExitRequested()
                     }
                 }
             }

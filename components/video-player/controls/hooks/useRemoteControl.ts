@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert } from "react-native";
+import { Alert, Platform } from "react-native";
 import { type SharedValue, useSharedValue } from "react-native-reanimated";
 import { useTVBackPress } from "@/hooks/useTVBackPress";
 import { useTVEventHandler } from "@/hooks/useTVEventHandler";
@@ -36,9 +36,9 @@ interface UseRemoteControlProps {
   onLongSeekStop?: () => void;
   /** Callback when up/down D-pad pressed (to show controls with play button focused) */
   onVerticalDpad?: () => void;
-  /** Called before the exit confirmation Alert is shown (e.g., to pause countdown) */
+  /** Called before leaving playback, or before the Apple TV exit confirmation (e.g., to pause countdown) */
   onWillExit?: () => void;
-  /** Called when the user cancels the exit confirmation Alert */
+  /** Called when the user cancels the Apple TV exit confirmation Alert */
   onCancelExit?: () => void;
   // Legacy props - kept for backwards compatibility with mobile Controls.tsx
   // These are ignored in the simplified implementation
@@ -123,7 +123,14 @@ export function useRemoteControl({
       // Signal Controls that exit is imminent (pauses countdown, sets guard)
       onWillExitRef.current?.();
 
-      // Controls are hidden, so confirm before leaving playback.
+      // Android TV leaves playback on back, the way TV apps there do, instead
+      // of asking first.
+      if (Platform.OS === "android") {
+        onBackRef.current();
+        return true;
+      }
+
+      // Apple TV confirms before leaving playback.
       Alert.alert(
         i18n.t("player.stopPlayback"),
         videoTitleRef.current
