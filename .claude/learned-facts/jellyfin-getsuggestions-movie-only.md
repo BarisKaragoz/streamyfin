@@ -2,7 +2,7 @@
 
 **Date**: 2026-05-12
 **Category**: api
-**Key files**: `components/home/Home.tsx`
+**Key files**: `utils/jellyfin/suggestedRows.ts`
 
 ## Detail
 

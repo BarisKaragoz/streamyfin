@@ -5,6 +5,7 @@ import { createStore, Provider as JotaiProvider } from "jotai";
 import { Home } from "./Home";
 
 let mockUser: { Id: string; Configuration: object } | null = null;
+let mockSettings: Record<string, unknown> = {};
 let mockSettingsRefresh: Promise<void> = Promise.resolve();
 let mockLatestMedia: BaseItemDto[] = [];
 let mockSuggestionCalls = 0;
@@ -39,7 +40,7 @@ jest.mock("@/providers/JellyfinProvider", () => {
 });
 jest.mock("@/utils/atoms/settings", () => ({
   useSettings: () => ({
-    settings: {},
+    settings: mockSettings,
     refreshStreamyfinPluginSettings: () => mockSettingsRefresh,
   }),
 }));
@@ -105,11 +106,18 @@ jest.mock("@/components/cards/CardRow", () => ({
 jest.mock("@/components/home/HomeHeroCarousel", () => ({
   HomeHeroCarousel: () => null,
 }));
+// Not what is under test: the StreamyStats rows show up as their titles.
 jest.mock("@/components/home/StreamystatsRecommendations", () => ({
-  StreamystatsRecommendations: () => null,
+  StreamystatsRecommendations: ({ title }: { title: string }) => {
+    const { Text: RowText } = jest.requireActual("react-native");
+    return <RowText>{title}</RowText>;
+  },
 }));
 jest.mock("@/components/home/StreamystatsPromotedWatchlists", () => ({
-  StreamystatsPromotedWatchlists: () => null,
+  StreamystatsPromotedWatchlists: () => {
+    const { Text: RowText } = jest.requireActual("react-native");
+    return <RowText>promoted_watchlists</RowText>;
+  },
 }));
 jest.mock("@/components/medialists/MediaListSection", () => ({
   MediaListSection: () => null,
@@ -124,6 +132,10 @@ jest.mock("@/components/Button", () => ({ Button: () => null }));
 
 const RECENTLY_ADDED = "home.recently_added_in Movies";
 const SUGGESTED_MOVIES = "home.suggested_movies";
+const SUGGESTED_SHOWS = "home.suggested_shows";
+const RECOMMENDED_MOVIES =
+  "home.settings.plugins.streamystats.recommended_movies";
+const PROMOTED_WATCHLISTS = "promoted_watchlists";
 
 const movie = (name: string): BaseItemDto => ({ Id: name, Name: name });
 
@@ -141,6 +153,7 @@ let userCount = 0;
 
 const resetMocks = () => {
   mockUser = { Id: `user-${++userCount}`, Configuration: {} };
+  mockSettings = {};
   mockSettingsRefresh = Promise.resolve();
   mockLatestMedia = [movie("Alien")];
   mockSuggestionCalls = 0;
@@ -234,5 +247,48 @@ describe("Home pull to refresh", () => {
     await pullToRefresh(view);
 
     expect(await screen.findByText(`${SUGGESTED_MOVIES}: Pick 3`)).toBeTruthy();
+  });
+});
+
+/**
+ * The rows from Recently Added down, top to bottom, by title. A row shows up as
+ * its title and its items, or as its title alone for a StreamyStats one.
+ */
+const rowTitlesFromRecentlyAdded = () => {
+  const titles = screen
+    .getAllByText(/^(home\.|promoted_watchlists$)/)
+    .map((node) => String(node.props.children).split(":")[0]);
+  return titles.slice(titles.indexOf(RECENTLY_ADDED));
+};
+
+describe("Home StreamyStats rows", () => {
+  // Regression: their place was worked out counting Suggested Movies only,
+  // from before Suggested Shows existed, which wedged them between the two
+  // suggested rows.
+  test("sit above both suggested rows", async () => {
+    mockSettings = { streamyStatsPromotedWatchlists: true };
+    await renderHome();
+
+    await screen.findByText(/^home\.suggested_shows:/);
+    expect(rowTitlesFromRecentlyAdded()).toEqual([
+      RECENTLY_ADDED,
+      PROMOTED_WATCHLISTS,
+      SUGGESTED_MOVIES,
+      SUGGESTED_SHOWS,
+    ]);
+  });
+
+  // Same miscount the other way: it put Recommended Movies below Suggested
+  // Shows.
+  test("sit above Suggested Shows when they replace Suggested Movies", async () => {
+    mockSettings = { streamyStatsMovieRecommendations: true };
+    await renderHome();
+
+    await screen.findByText(/^home\.suggested_shows:/);
+    expect(rowTitlesFromRecentlyAdded()).toEqual([
+      RECENTLY_ADDED,
+      RECOMMENDED_MOVIES,
+      SUGGESTED_SHOWS,
+    ]);
   });
 });

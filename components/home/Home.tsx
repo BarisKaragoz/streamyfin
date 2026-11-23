@@ -5,7 +5,6 @@ import type {
 } from "@jellyfin/sdk/lib/generated-client/models";
 import {
   getItemsApi,
-  getSuggestionsApi,
   getTvShowsApi,
   getUserLibraryApi,
   getUserViewsApi,
@@ -38,7 +37,10 @@ import { StreamystatsRecommendations } from "@/components/home/StreamystatsRecom
 import { Loader } from "@/components/Loader";
 import { MediaListSection } from "@/components/medialists/MediaListSection";
 import { Colors } from "@/constants/Colors";
-import { SUGGESTED_ROWS_STALE_TIME } from "@/constants/Home";
+import {
+  SUGGESTED_ROWS_PAGE_SIZE,
+  SUGGESTED_ROWS_STALE_TIME,
+} from "@/constants/Home";
 import useRouter from "@/hooks/useAppRouter";
 import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 import { useRefreshLibraryOnFocus } from "@/hooks/useRefreshLibraryOnFocus";
@@ -58,6 +60,10 @@ import {
 import { SortByOption, SortOrderOption } from "@/utils/atoms/filters";
 import { useSettings } from "@/utils/atoms/settings";
 import { eventBus } from "@/utils/eventBus";
+import {
+  fetchSuggestedMoviesPage,
+  fetchSuggestedShowsPage,
+} from "@/utils/jellyfin/suggestedRows";
 import { storage } from "@/utils/mmkv";
 
 // Conditionally load TV version
@@ -235,41 +241,18 @@ const HomeMobile = () => {
 
   // Extracted so the same fetch can power both the useInfiniteQuery in
   // InfiniteScrollingCollectionList and useSuggestedRowsRefresh below.
-  const fetchSuggestedMoviesPage = useCallback(
+  const fetchSuggestedMovies = useCallback(
     async (pageParam: number = 0): Promise<BaseItemDto[]> => {
       if (!api || !user?.Id) return [];
-      return (
-        (
-          await getSuggestionsApi(api).getSuggestions({
-            userId: user.Id,
-            startIndex: pageParam,
-            limit: 10,
-            mediaType: ["Video"],
-            type: ["Movie"],
-          })
-        ).data.Items || []
-      );
+      return fetchSuggestedMoviesPage(api, user.Id, pageParam);
     },
     [api, user?.Id],
   );
 
-  const fetchSuggestedShowsPage = useCallback(
+  const fetchSuggestedShows = useCallback(
     async (pageParam: number = 0): Promise<BaseItemDto[]> => {
       if (!api || !user?.Id) return [];
-      return (
-        (
-          await getItemsApi(api).getItems({
-            userId: user.Id,
-            startIndex: pageParam,
-            limit: 10,
-            recursive: true,
-            includeItemTypes: ["Series"],
-            sortBy: ["IsFavoriteOrLiked", "Random"],
-            imageTypeLimit: 1,
-            enableImageTypes: ["Primary", "Backdrop", "Thumb"],
-          })
-        ).data.Items || []
-      );
+      return fetchSuggestedShowsPage(api, user.Id, pageParam);
     },
     [api, user?.Id],
   );
@@ -425,10 +408,10 @@ const HomeMobile = () => {
               title: t("home.suggested_movies"),
               queryKey: suggestedMoviesQueryKey(user?.Id),
               queryFn: async ({ pageParam = 0 }: { pageParam?: number }) =>
-                fetchSuggestedMoviesPage(pageParam),
+                fetchSuggestedMovies(pageParam),
               type: "InfiniteScrollingCollectionList" as const,
               orientation: "vertical" as const,
-              pageSize: 10,
+              pageSize: SUGGESTED_ROWS_PAGE_SIZE,
               priority: 2 as const,
               staleTime: SUGGESTED_ROWS_STALE_TIME,
             },
@@ -441,10 +424,10 @@ const HomeMobile = () => {
               title: t("home.suggested_shows"),
               queryKey: suggestedShowsQueryKey(user?.Id),
               queryFn: async ({ pageParam = 0 }: { pageParam?: number }) =>
-                fetchSuggestedShowsPage(pageParam),
+                fetchSuggestedShows(pageParam),
               type: "InfiniteScrollingCollectionList" as const,
               orientation: "vertical" as const,
-              pageSize: 10,
+              pageSize: SUGGESTED_ROWS_PAGE_SIZE,
               priority: 2 as const,
               staleTime: SUGGESTED_ROWS_STALE_TIME,
             },
@@ -457,8 +440,8 @@ const HomeMobile = () => {
     user?.Id,
     latestMediaLibraries,
     t,
-    fetchSuggestedMoviesPage,
-    fetchSuggestedShowsPage,
+    fetchSuggestedMovies,
+    fetchSuggestedShows,
     settings?.streamyStatsMovieRecommendations,
     settings?.streamyStatsSeriesRecommendations,
     settings.mergeNextUpAndContinueWatching,
@@ -572,8 +555,8 @@ const HomeMobile = () => {
   const refreshSuggestions = useSuggestedRowsRefresh({
     userId: user?.Id,
     ready: !!api && allHighPriorityLoaded,
-    fetchMovies: hasSuggestedMovies ? fetchSuggestedMoviesPage : undefined,
-    fetchShows: hasSuggestedShows ? fetchSuggestedShowsPage : undefined,
+    fetchMovies: hasSuggestedMovies ? fetchSuggestedMovies : undefined,
+    fetchShows: hasSuggestedShows ? fetchSuggestedShows : undefined,
   });
 
   // loadedSections is left alone on purpose: a row reports itself loaded once
@@ -690,13 +673,13 @@ const HomeMobile = () => {
         <HomeHeroCarousel />
         {sections.map((section, index) => {
           // Render Streamystats sections after Recently Added sections
-          // For default sections: place after Recently Added, before Suggested Movies (if present)
+          // For default sections: place after Recently Added, before the suggested rows (if present)
           // For custom sections: place at the very end
-          const hasSuggestedMovies =
-            !settings?.streamyStatsMovieRecommendations &&
-            !settings?.home?.sections;
           const streamystatsIndex =
-            sections.length - 1 - (hasSuggestedMovies ? 1 : 0);
+            sections.length -
+            1 -
+            (hasSuggestedMovies ? 1 : 0) -
+            (hasSuggestedShows ? 1 : 0);
           const hasStreamystatsContent =
             settings.streamyStatsMovieRecommendations ||
             settings.streamyStatsSeriesRecommendations ||

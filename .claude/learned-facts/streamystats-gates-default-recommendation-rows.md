@@ -2,7 +2,7 @@
 
 **Date**: 2026-05-12
 **Category**: home
-**Key files**: `components/home/Home.tsx`, `utils/atoms/settings.ts`
+**Key files**: `components/home/Home.tsx`, `components/home/Home.tv.tsx`, `utils/atoms/settings.ts`
 
 ## Detail
 

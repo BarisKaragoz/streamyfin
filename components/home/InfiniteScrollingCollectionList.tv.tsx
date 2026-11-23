@@ -3,6 +3,7 @@ import type { BaseItemDto } from "@jellyfin/sdk/lib/generated-client/models";
 import {
   type QueryFunction,
   type QueryKey,
+  type StaleTime,
   useInfiniteQuery,
 } from "@tanstack/react-query";
 import { useSegments } from "expo-router";
@@ -27,6 +28,9 @@ import { SortByOption, SortOrderOption } from "@/utils/atoms/filters";
 import { useSettings } from "@/utils/atoms/settings";
 import { scaleSize } from "@/utils/scaleSize";
 
+// How long a row's items stay fresh, and how often it polls for new ones.
+const ROW_REFRESH_INTERVAL = 60 * 1000;
+
 // Extra padding to accommodate scale animation (1.05x) and glow shadow
 const _SCALE_PADDING = scaleSize(20);
 
@@ -44,6 +48,11 @@ interface Props extends ViewProps {
   isFirstSection?: boolean;
   onItemFocus?: (item: BaseItemDto) => void;
   parentId?: string;
+  /**
+   * How long fetched items stay fresh; defaults to one minute, polled at the
+   * same pace. A "static" row is never polled.
+   */
+  staleTime?: StaleTime;
 }
 
 type Typography = ReturnType<typeof useScaledTVTypography>;
@@ -126,6 +135,7 @@ export const InfiniteScrollingCollectionList: React.FC<Props> = ({
   isFirstSection = false,
   onItemFocus,
   parentId,
+  staleTime = ROW_REFRESH_INTERVAL,
   ...props
 }) => {
   const typography = useScaledTVTypography();
@@ -160,8 +170,10 @@ export const InfiniteScrollingCollectionList: React.FC<Props> = ({
         return allPages.reduce((acc, page) => acc + page.length, 0);
       },
       initialPageParam: 0,
-      staleTime: 60 * 1000,
-      refetchInterval: 60 * 1000,
+      staleTime,
+      // Polling refetches a query whatever its staleTime, "static" included,
+      // which reshuffled the suggested rows every minute while browsing them.
+      refetchInterval: staleTime === "static" ? false : ROW_REFRESH_INTERVAL,
       refetchOnWindowFocus: false,
       refetchOnReconnect: true,
       enabled,

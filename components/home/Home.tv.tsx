@@ -6,12 +6,15 @@ import type {
 } from "@jellyfin/sdk/lib/generated-client/models";
 import {
   getItemsApi,
-  getSuggestionsApi,
   getTvShowsApi,
   getUserLibraryApi,
   getUserViewsApi,
 } from "@jellyfin/sdk/lib/utils/api";
-import { type QueryFunction, useQuery } from "@tanstack/react-query";
+import {
+  type QueryFunction,
+  type StaleTime,
+  useQuery,
+} from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -32,11 +35,20 @@ import { StreamystatsPromotedWatchlists } from "@/components/home/StreamystatsPr
 import { StreamystatsRecommendations } from "@/components/home/StreamystatsRecommendations.tv";
 import { TVHeroCarousel } from "@/components/home/TVHeroCarousel";
 import { Loader } from "@/components/Loader";
+import {
+  SUGGESTED_ROWS_PAGE_SIZE,
+  SUGGESTED_ROWS_STALE_TIME,
+} from "@/constants/Home";
 import { useScaledTVTypography } from "@/constants/TVTypography";
 import useRouter from "@/hooks/useAppRouter";
 import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 import { useRefreshLibraryOnFocus } from "@/hooks/useRefreshLibraryOnFocus";
 import { useInvalidatePlaybackProgressCache } from "@/hooks/useRevalidatePlaybackProgressCache";
+import {
+  suggestedMoviesQueryKey,
+  suggestedShowsQueryKey,
+  useSuggestedRowsRefresh,
+} from "@/hooks/useSuggestedRowsRefresh";
 import { useTVItemActionModal } from "@/hooks/useTVItemActionModal";
 import {
   apiAtom,
@@ -45,6 +57,10 @@ import {
 } from "@/providers/JellyfinProvider";
 import { useSettings } from "@/utils/atoms/settings";
 import { getBackdropUrl } from "@/utils/jellyfin/image/getBackdropUrl";
+import {
+  fetchSuggestedMoviesPage,
+  fetchSuggestedShowsPage,
+} from "@/utils/jellyfin/suggestedRows";
 import { scaleSize } from "@/utils/scaleSize";
 import { updateTVDiscovery } from "@/utils/tvDiscovery/sync";
 
@@ -61,6 +77,7 @@ type InfiniteScrollingCollectionListSection = {
   orientation?: "horizontal" | "vertical";
   pageSize?: number;
   parentId?: string;
+  staleTime?: StaleTime;
 };
 
 type Section = InfiniteScrollingCollectionListSection;
@@ -221,7 +238,7 @@ export const Home = () => {
   });
 
   // Fetch hero items (Continue Watching + Next Up combined)
-  const { data: heroItems } = useQuery({
+  const { data: heroItems, isFetched: heroItemsFetched } = useQuery({
     queryKey: ["home", "heroItems", user?.Id],
     queryFn: async () => {
       if (!api || !user?.Id) return [];
@@ -329,6 +346,24 @@ export const Home = () => {
       pageSize,
       parentId,
     }),
+    [api, user?.Id],
+  );
+
+  // Extracted so the same fetch can power both the useInfiniteQuery in
+  // InfiniteScrollingCollectionList and useSuggestedRowsRefresh below.
+  const fetchSuggestedMovies = useCallback(
+    async (pageParam: number = 0): Promise<BaseItemDto[]> => {
+      if (!api || !user?.Id) return [];
+      return fetchSuggestedMoviesPage(api, user.Id, pageParam);
+    },
+    [api, user?.Id],
+  );
+
+  const fetchSuggestedShows = useCallback(
+    async (pageParam: number = 0): Promise<BaseItemDto[]> => {
+      if (!api || !user?.Id) return [];
+      return fetchSuggestedShowsPage(api, user.Id, pageParam);
+    },
     [api, user?.Id],
   );
 
@@ -450,24 +485,33 @@ export const Home = () => {
     const ss: Section[] = [
       ...firstSections,
       ...latestMediaViews,
+      // Only show Jellyfin suggested movies if StreamyStats recommendations are disabled
       ...(!settings?.streamyStatsMovieRecommendations
         ? [
             {
               title: t("home.suggested_movies"),
-              queryKey: ["home", "suggestedMovies", user?.Id],
+              queryKey: suggestedMoviesQueryKey(user?.Id),
               queryFn: async ({ pageParam = 0 }: { pageParam?: number }) =>
-                (
-                  await getSuggestionsApi(api).getSuggestions({
-                    userId: user?.Id,
-                    startIndex: pageParam,
-                    limit: 10,
-                    mediaType: ["Video"],
-                    type: ["Movie"],
-                  })
-                ).data.Items || [],
+                fetchSuggestedMovies(pageParam),
               type: "InfiniteScrollingCollectionList" as const,
               orientation: "vertical" as const,
-              pageSize: 10,
+              pageSize: SUGGESTED_ROWS_PAGE_SIZE,
+              staleTime: SUGGESTED_ROWS_STALE_TIME,
+            },
+          ]
+        : []),
+      // Only show Jellyfin suggested shows if StreamyStats series recommendations are disabled
+      ...(!settings?.streamyStatsSeriesRecommendations
+        ? [
+            {
+              title: t("home.suggested_shows"),
+              queryKey: suggestedShowsQueryKey(user?.Id),
+              queryFn: async ({ pageParam = 0 }: { pageParam?: number }) =>
+                fetchSuggestedShows(pageParam),
+              type: "InfiniteScrollingCollectionList" as const,
+              orientation: "vertical" as const,
+              pageSize: SUGGESTED_ROWS_PAGE_SIZE,
+              staleTime: SUGGESTED_ROWS_STALE_TIME,
             },
           ]
         : []),
@@ -479,7 +523,10 @@ export const Home = () => {
     collections,
     t,
     createCollectionConfig,
+    fetchSuggestedMovies,
+    fetchSuggestedShows,
     settings?.streamyStatsMovieRecommendations,
+    settings?.streamyStatsSeriesRecommendations,
     settings.mergeNextUpAndContinueWatching,
   ]);
 
@@ -558,6 +605,23 @@ export const Home = () => {
   }, [api, user?.Id, settings?.home?.sections, t]);
 
   const sections = settings?.home?.sections ? customSections : defaultSections;
+
+  const usingCustomSections = !!settings?.home?.sections;
+  const hasSuggestedMovies =
+    !usingCustomSections && !settings?.streamyStatsMovieRecommendations;
+  const hasSuggestedShows =
+    !usingCustomSections && !settings?.streamyStatsSeriesRecommendations;
+
+  // The suggested rows never refetch by themselves (SUGGESTED_ROWS_STALE_TIME),
+  // so this is what gives them new picks on a cold start. TV has no pull to
+  // refresh, so that is their only refresh. It waits for the hero's Continue
+  // Watching and Next Up, the TV's counterpart of the mobile high priority rows.
+  useSuggestedRowsRefresh({
+    userId: user?.Id,
+    ready: !!api && heroItemsFetched,
+    fetchMovies: hasSuggestedMovies ? fetchSuggestedMovies : undefined,
+    fetchShows: hasSuggestedShows ? fetchSuggestedShows : undefined,
+  });
 
   // Determine if hero should be shown (separate setting from backdrop)
   // We need this early to calculate which sections will actually be rendered
@@ -770,14 +834,14 @@ export const Home = () => {
           {/* Skip first section (Continue Watching) when hero is shown since hero displays that content */}
           {renderedSections.map((section, index) => {
             // Render Streamystats sections after Recently Added sections
-            // For default sections: place after Recently Added, before Suggested Movies (if present)
+            // For default sections: place after Recently Added, before the suggested rows (if present)
             // For custom sections: place at the very end
-            const hasSuggestedMovies =
-              !settings?.streamyStatsMovieRecommendations &&
-              !settings?.home?.sections;
             const displayedSectionsLength = renderedSections.length;
             const streamystatsIndex =
-              displayedSectionsLength - 1 - (hasSuggestedMovies ? 1 : 0);
+              displayedSectionsLength -
+              1 -
+              (hasSuggestedMovies ? 1 : 0) -
+              (hasSuggestedShows ? 1 : 0);
             const hasStreamystatsContent =
               settings.streamyStatsMovieRecommendations ||
               settings.streamyStatsSeriesRecommendations ||
@@ -827,6 +891,7 @@ export const Home = () => {
                     isFirstSection={isFirstSection}
                     onItemFocus={handleItemFocus}
                     parentId={section.parentId}
+                    staleTime={section.staleTime}
                   />
                   {streamystatsSections}
                 </View>
